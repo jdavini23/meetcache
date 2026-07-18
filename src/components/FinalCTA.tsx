@@ -26,7 +26,7 @@ export default function FinalCTA() {
               id="final-cta-heading"
               className="font-serif text-3xl sm:text-4xl md:text-5xl font-medium tracking-tight mb-4 leading-tight"
             >
-              Be first in line<span className="text-terracotta">.</span>
+              Help shape Cache<span className="text-terracotta">.</span>
             </h2>
             
             {/* Paragraph */}
@@ -34,7 +34,7 @@ export default function FinalCTA() {
               id="final-cta-paragraph"
               className="font-sans text-sm sm:text-base text-cream/80 max-w-lg mb-10 leading-relaxed"
             >
-              We are a small team of parents building a quiet, honest alternative to the noisy web. We are opening our private beta slowly to make sure we can support every family personally. Save your spot today, and we will send you an invite the moment we have space for you.
+              We're building the first version for parents of children ages 1–6. Join early access to try Cache, share feedback, and help us decide what to build first.
             </p>
 
             {/* Email form container */}

@@ -4,18 +4,18 @@ export default function HowItWorks() {
   const steps = [
     {
       number: "01",
-      title: "Introduce your family",
-      description: "Tell us about your child's age, temperament, sleep rhythms, and what is hard right now. Leave a voice note or type it out. No detail is too small."
+      title: "Share the context",
+      description: "Tell Cache about your child's age, temperament, routines, current challenges, and anything you want it to remember."
     },
     {
       number: "02",
-      title: "Ask anything, anytime",
-      description: "When the 6pm meltdown hits or you're awake at 2am, just send a text. It is like reaching out to a trusted coach who already knows your family's whole story."
+      title: "Ask when something comes up",
+      description: "Type or leave a voice note whenever you want help thinking through a routine, behavior, or difficult moment."
     },
     {
       number: "03",
-      title: "Get help that actually fits",
-      description: "No generic checklists. You get clear, practical guidance that builds on last week's discussions, respects your child's personality, and grows as they grow."
+      title: "Get a practical next step",
+      description: "Cache uses your child's history and previous conversations to offer guidance that fits the situation."
     }
   ];
 
@@ -58,13 +58,13 @@ export default function HowItWorks() {
             id="how-it-works-heading"
             className="font-serif text-3xl sm:text-4xl font-medium tracking-tight text-ink mb-6 italic"
           >
-            Tell us once. We remember for good.
+            Share the context once. Build on it over time.
           </h2>
           <p 
             id="how-it-works-sub"
             className="font-sans text-base text-ink/80 leading-relaxed"
           >
-            We built Cache so you don't have to repeat yourself. When you have a partner who holds the context, finding help feels less like researching and more like breathing.
+            Cache keeps the details that matter close, so each new conversation can begin where the last one left off.
           </p>
         </motion.div>
 

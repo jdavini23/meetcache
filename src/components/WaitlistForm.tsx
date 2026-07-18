@@ -15,9 +15,8 @@ export default function WaitlistForm({ idPrefix, isDarkTheme = false }: Waitlist
   const [status, setStatus] = useState<'idle' | 'success' | 'duplicate' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState('');
   
-  // Pricing survey state
-  const [pricingSurveyStatus, setPricingSurveyStatus] = useState<'idle' | 'submitting' | 'done'>('idle');
-  const [selectedPrice, setSelectedPrice] = useState<string | null>(null);
+  // Early-interest survey state
+  const [useCaseSurveyStatus, setUseCaseSurveyStatus] = useState<'idle' | 'submitting' | 'done'>('idle');
 
   const validateEmail = (val: string) => {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val.trim());
@@ -72,37 +71,42 @@ export default function WaitlistForm({ idPrefix, isDarkTheme = false }: Waitlist
     }
   };
 
-  const handlePriceSelect = async (price: string) => {
-    setSelectedPrice(price);
-    setPricingSurveyStatus('submitting');
-
+  const saveUseCaseFallback = (useCase: string) => {
     try {
-      // Save choice locally as a fallback immediately
-      localStorage.setItem(`price_signal_${submittedEmail.toLowerCase()}`, price);
-
-      // Try saving choice by updating that email's row with the price_signal in the DB
-      const { error } = await supabase
-        .from('waitlist')
-        .update({ price_signal: price })
-        .eq('email', submittedEmail.toLowerCase());
-
-      if (error) {
-        // If the database does not have the column price_signal yet, we avoid throwing console.error
-        // as the signup is already counts and is saved locally.
-        console.warn('Database price_signal update skipped:', error.message);
-      }
+      localStorage.setItem(`cache_waitlist_use_case_signal:${submittedEmail.toLowerCase()}`, useCase);
     } catch (err) {
-      console.warn('Unexpected price survey error skipped:', err);
-    } finally {
-      setPricingSurveyStatus('done');
+      console.warn('Local use-case survey fallback skipped:', err);
     }
   };
 
-  const priceTiers = [
-    { value: '$9', label: '$9 / mo' },
-    { value: '$19', label: '$19 / mo' },
-    { value: '$29', label: '$29 / mo' },
-    { value: 'not_sure', label: 'Not sure yet' }
+  const handleUseCaseSelect = async (useCase: string) => {
+    setUseCaseSurveyStatus('submitting');
+
+    try {
+      const { error } = await supabase
+        .from('waitlist_use_case_submissions')
+        .insert({
+          email: submittedEmail.toLowerCase(),
+          use_case_signal: useCase
+        });
+
+      if (error) {
+        saveUseCaseFallback(useCase);
+        console.warn('Database use_case_signal update skipped:', error.message);
+      }
+    } catch (err) {
+      saveUseCaseFallback(useCase);
+      console.warn('Unexpected use-case survey error skipped:', err);
+    } finally {
+      setUseCaseSurveyStatus('done');
+    }
+  };
+
+  const useCases = [
+    { value: 'sleep_bedtime', label: 'Sleep and bedtime' },
+    { value: 'behavior_emotions', label: 'Behavior and big emotions' },
+    { value: 'routines_transitions', label: 'Routines and transitions' },
+    { value: 'something_else', label: 'Something else' }
   ];
 
   return (
@@ -119,7 +123,7 @@ export default function WaitlistForm({ idPrefix, isDarkTheme = false }: Waitlist
           >
             {!isDarkTheme && (
               <label className="block text-[10px] uppercase tracking-widest font-bold text-ink/50 mb-4 text-left">
-                Get early access
+                Join early access
               </label>
             )}
             <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-2.5">
@@ -152,7 +156,7 @@ export default function WaitlistForm({ idPrefix, isDarkTheme = false }: Waitlist
                   </>
                 ) : (
                   <>
-                    <span>Save my spot</span>
+                    <span>Join early access</span>
                     <ArrowRight className="h-4 w-4" />
                   </>
                 )}
@@ -173,10 +177,10 @@ export default function WaitlistForm({ idPrefix, isDarkTheme = false }: Waitlist
             <p className={`mt-4 text-xs tracking-wide text-center sm:text-left
               ${isDarkTheme ? 'text-cream/60' : 'text-ink/60'}`}
             >
-              Free to join. No spam — one note when your spot opens.
+              Share only your email. We'll use it for early-access and occasional research messages.
             </p>
           </motion.div>
-        ) : (status === 'success' || status === 'duplicate') && pricingSurveyStatus !== 'done' ? (
+        ) : (status === 'success' || status === 'duplicate') && useCaseSurveyStatus !== 'done' ? (
           <motion.div
             key="survey-step"
             initial={{ opacity: 0, y: 15 }}
@@ -202,7 +206,7 @@ export default function WaitlistForm({ idPrefix, isDarkTheme = false }: Waitlist
                 >
                   {status === 'duplicate' 
                     ? "You are already on our list. We will reach out soon." 
-                    : "We will send you a short note the moment a spot opens."}
+                    : "We'll be in touch about early access and opportunities to share feedback."}
                 </p>
               </div>
             </div>
@@ -214,29 +218,29 @@ export default function WaitlistForm({ idPrefix, isDarkTheme = false }: Waitlist
                 A question while you wait
               </p>
               <h5 className="font-serif text-[17px] font-bold leading-snug mb-4">
-                Would you pay for a coach that remembers?
+                What would you want Cache's help with first?
               </h5>
               
               <div className="grid grid-cols-2 gap-2">
-                {priceTiers.map((tier) => (
+                {useCases.map((useCase) => (
                   <button
-                    key={tier.value}
-                    onClick={() => handlePriceSelect(tier.value)}
-                    disabled={pricingSurveyStatus === 'submitting'}
+                    key={useCase.value}
+                    onClick={() => handleUseCaseSelect(useCase.value)}
+                    disabled={useCaseSurveyStatus === 'submitting'}
                     className={`px-3 py-2.5 rounded-xl text-xs font-medium border text-center cursor-pointer transition-all duration-200 active:scale-[0.97]
                       ${isDarkTheme
                         ? 'bg-cream/5 border-cream/10 text-cream/90 hover:bg-cream/10 hover:border-cream/20'
                         : 'bg-cream border-transparent text-ink/90 hover:bg-cream/70'
                       }`}
                   >
-                    {tier.label}
+                    {useCase.label}
                   </button>
                 ))}
               </div>
               
               <div className="mt-4 flex justify-end">
                 <button
-                  onClick={() => setPricingSurveyStatus('done')}
+                  onClick={() => setUseCaseSurveyStatus('done')}
                   className={`text-xs underline cursor-pointer transition-colors duration-200
                     ${isDarkTheme ? 'text-cream/40 hover:text-cream/70' : 'text-ink/40 hover:text-ink/70'}`}
                 >
@@ -260,13 +264,13 @@ export default function WaitlistForm({ idPrefix, isDarkTheme = false }: Waitlist
             <div className="h-10 w-10 rounded-full bg-sage/10 text-sage flex items-center justify-center mb-3">
               <Check className="h-5 w-5" />
             </div>
-            <h4 className="font-serif text-lg font-bold mb-1 text-ink">
-              Thank you.
+            <h4 className={`font-serif text-lg font-bold mb-1 ${isDarkTheme ? 'text-cream' : 'text-ink'}`}>
+              Thanks — that helps.
             </h4>
             <p className={`text-xs max-w-xs leading-relaxed
               ${isDarkTheme ? 'text-cream/70' : 'text-ink/70'}`}
             >
-              Your voice helps us build something real for parents.
+              Your answer helps us decide what to build first.
             </p>
           </motion.div>
         )}
