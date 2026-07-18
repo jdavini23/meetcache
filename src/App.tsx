@@ -1,7 +1,7 @@
 import Navbar from './components/Navbar';
 import Hero from './components/Hero';
 import Problem from './components/Problem';
-import TheTurn from './components/TheTurn';
+import ProductExample from './components/ProductExample';
 import HowItWorks from './components/HowItWorks';
 import Difference from './components/Difference';
 import FinalCTA from './components/FinalCTA';
@@ -36,8 +36,8 @@ export default function App() {
         {/* 3. Problem Section */}
         <Problem />
 
-        {/* 3.5. The Turn (Emotional Pivot) Section */}
-        <TheTurn />
+        {/* 3.5. Illustrative Product Example */}
+        <ProductExample />
 
         {/* 4. How It Works Section */}
         <HowItWorks />

@@ -6,20 +6,20 @@ export default function Problem() {
     {
       id: "problem-card-1",
       icon: <RefreshCw className="h-5 w-5 text-terracotta" />,
-      title: "'How old is your child?' — again",
-      description: "You describe the 6pm meltdowns and the sleep schedule on the fridge. You close the tab. The next night, you start over from zero. Standard tools live in a single moment, forgetting the child you already explained."
+      title: "Start every question from scratch",
+      description: "Re-explain your child's age, routines, temperament, and current phase every time you need help."
     },
     {
       id: "problem-card-2",
       icon: <HelpCircle className="h-5 w-5 text-terracotta" />,
-      title: "Advice for a child who doesn't exist",
-      description: "Generic parenting tip lists are built for an average, theoretical child. But your child gets overstimulated by clothing tags, or only falls asleep when the room is ice cold. Standard advice ignores the details."
+      title: "Get advice for the average child",
+      description: "Generic suggestions miss the sensory needs, preferences, and patterns that matter in your home."
     },
     {
       id: "problem-card-3",
       icon: <Layers className="h-5 w-5 text-terracotta" />,
-      title: "No context carries over",
-      description: "What finally worked for last month's separation struggles disappears into the void. Because there is no continuity, every new developmental phase feels like a fresh crisis where you have to re-teach the history."
+      title: "Lose track of what worked",
+      description: "Useful ideas disappear between conversations, making every new challenge feel disconnected from the last one."
     }
   ];
 
@@ -62,13 +62,13 @@ export default function Problem() {
             id="problem-heading"
             className="font-serif text-3xl sm:text-4xl font-medium tracking-tight text-ink mb-6 italic"
           >
-            You've explained your kid a hundred times.
+            Parenting advice rarely knows your child.
           </h2>
           <p 
             id="problem-intro"
             className="font-sans text-base text-ink/80 leading-relaxed"
           >
-            Every time you look for help, you end up re-typing your child's entire history. You describe their temperament, their triggers, and their sleep struggles to search boxes that treat you like a stranger every single time. You are forced to summarize the kid you love into a sterile text field, over and over, just to get advice built for an average child you don't have.
+            Search results, forums, and general-purpose chatbots can answer a question. But they don't know the history behind it: what changed, what you've tried, or what makes your child different.
           </p>
         </motion.div>
 

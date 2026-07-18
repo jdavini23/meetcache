@@ -1,6 +1,6 @@
 {
   "name": "Cache Landing Page",
-  "description": "A pre-launch waitlist landing page for Cache, a parenting coach that remembers your child.",
+  "description": "An early-access landing page for Cache, an AI parenting coach that remembers your child's context.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

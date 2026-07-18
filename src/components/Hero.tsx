@@ -81,7 +81,7 @@ export default function Hero() {
           className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-sage/10 border border-sage/20 text-xs font-medium tracking-wide text-sage uppercase mb-8"
         >
           <span className="h-1.5 w-1.5 rounded-full bg-sage animate-pulse" />
-          <span>Private beta · Join the waitlist</span>
+          <span>Early access for parents of children ages 1–6</span>
         </motion.div>
 
         {/* Headline */}
@@ -92,7 +92,7 @@ export default function Hero() {
           transition={{ duration: 0.6, delay: 0.3 }}
           className="font-serif text-[42px] sm:text-5xl md:text-[64px] leading-[1.12] md:leading-[1.1] font-medium tracking-tight text-ink max-w-3xl"
         >
-          A coach that <span className="text-terracotta italic font-serif">remembers</span> your kid.
+          A parenting coach that <span className="text-terracotta italic font-serif">remembers</span> your child.
         </motion.h1>
 
         {/* Subhead */}
@@ -103,7 +103,7 @@ export default function Hero() {
           transition={{ duration: 0.6, delay: 0.4 }}
           className="font-sans text-lg md:text-xl opacity-80 leading-relaxed max-w-xl mt-6 mb-10"
         >
-          You hold your entire child in your head. Every phase, every trigger, what finally worked at 2am last Tuesday. Yet every time you ask for help, you have to explain them from zero to a system that forgets them the second you close it. Cache is the parenting coach that remembers with you. Tell us about your child once. We hold onto the history, so every answer fits the child you actually have.
+          Cache is an AI parenting coach that remembers your child's routines, temperament, triggers, and what you've already tried—so you can get practical guidance without starting over every time.
         </motion.p>
 
         {/* Form Container */}

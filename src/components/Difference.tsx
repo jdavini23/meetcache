@@ -1,4 +1,4 @@
-import { BrainCircuit, Milestone, Users, ShieldCheck } from 'lucide-react';
+import { BrainCircuit, Milestone, RefreshCw, HeartHandshake } from 'lucide-react';
 import { motion } from 'motion/react';
 
 export default function Difference() {
@@ -6,26 +6,26 @@ export default function Difference() {
     {
       id: "diff-point-1",
       icon: <BrainCircuit className="h-5 w-5 text-sage" />,
-      title: "It knows your child",
-      description: "Cache builds a secure, private memory of your child's unique traits and history. It adapts as they transition from infant sleep schedules to toddler temperaments."
+      title: "Remembers relevant context",
+      description: "Cache keeps your child's routines, triggers, preferences, and patterns in mind from one conversation to the next."
     },
     {
       id: "diff-point-2",
       icon: <Milestone className="h-5 w-5 text-sage" />,
-      title: "Continuity over months",
-      description: "Everything carries over. If you discussed separation anxiety last month, Cache remembers that context when you ask about preschool prep this week."
+      title: "Adapts as your child changes",
+      description: "Update the context as routines shift, new stages begin, and yesterday's challenge turns into something new."
     },
     {
       id: "diff-point-3",
-      icon: <Users className="h-5 w-5 text-sage" />,
-      title: "Your family's secure history",
-      description: "Track developmental stages, bedtime routines, and multiple siblings in one private place. Your family's data is fully private, secure, and accessible only to you."
+      icon: <RefreshCw className="h-5 w-5 text-sage" />,
+      title: "Builds on what you've tried",
+      description: "New suggestions can account for what helped, what did not, and what has changed since your last conversation."
     },
     {
       id: "diff-point-4",
-      icon: <ShieldCheck className="h-5 w-5 text-sage" />,
-      title: "A relationship, not a search box",
-      description: "You don't need a list of forum links or high-stress parenting blogs. You need one calm, coherent voice that understands your child's context and stays in your corner."
+      icon: <HeartHandshake className="h-5 w-5 text-sage" />,
+      title: "Made for everyday support",
+      description: "Use Cache to think through daily routines and parenting challenges—not as a substitute for medical care or professional advice."
     }
   ];
 
@@ -68,13 +68,13 @@ export default function Difference() {
             id="difference-heading"
             className="font-serif text-3xl sm:text-4xl font-medium tracking-tight text-ink mb-6 italic"
           >
-            Not another chatbot you have to re-teach.
+            More context. Less starting over.
           </h2>
           <p 
             id="difference-sub"
             className="font-sans text-base text-ink/80 leading-relaxed"
           >
-            Most tools treat you like a blank slate every time you log in. Cache is different. It is a quiet, continuous thread that stays with your family through every stage.
+            Cache remembers the useful details between conversations, so guidance can reflect the child you know instead of an average one.
           </p>
         </motion.div>
 
