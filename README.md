@@ -22,4 +22,5 @@ For production, build the client with `npm run build` and run the combined serve
 ## Security notes
 
 - `VITE_SUPABASE_*` values are intentionally browser-visible. `SUPABASE_SERVICE_ROLE_KEY` and `GEMINI_API_KEY` must only be available to `server.ts`.
+- `GEMINI_MODEL` defaults to `gemini-3.6-flash`, so the server model can be updated without changing application code.
 - The chat endpoint verifies a Supabase access token, reads the caller's profile, and persists messages server-side. Database row-level security keeps browser access scoped to its owner.

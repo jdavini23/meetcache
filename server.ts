@@ -17,6 +17,7 @@ const required = (name: string) => {
 const supabaseUrl = required('SUPABASE_URL');
 const serviceRoleKey = required('SUPABASE_SERVICE_ROLE_KEY');
 const geminiApiKey = required('GEMINI_API_KEY');
+const geminiModel = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 const supabase = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
 const gemini = new GoogleGenAI({ apiKey: geminiApiKey });
 const app = express();
@@ -47,7 +48,7 @@ app.post('/api/chat', async (request, response) => {
 
     const history = (priorMessages ?? []).reverse().map((item) => `${item.role === 'parent' ? 'Parent' : 'Cache'}: ${item.content}`).join('\n');
     const prompt = `You are Cache, a calm, empathetic AI parenting coach. Give practical, age-appropriate parenting ideas. Do not diagnose, provide medical or mental-health treatment, or present yourself as a replacement for a professional. For health, safety, abuse, self-harm, or imminent-risk concerns, state the limitation clearly and encourage the parent to contact the appropriate licensed professional, emergency services, or local crisis support immediately. Never shame the parent or child. Ask one focused follow-up question when context is missing.\n\nChild context:\n- Nickname: ${profile.nickname}\n- Birth month/year: ${profile.birth_month}/${profile.birth_year}\n- Pronouns: ${profile.pronouns ?? 'not provided'}\n- Routines: ${profile.routines}\n- Current challenges: ${profile.challenges}\n- Parent notes: ${profile.parent_notes ?? 'none'}\n\nRecent conversation:\n${history || '(new conversation)'}\n\nParent: ${message}\n\nRespond as Cache in plain, warm language. Keep the response concise and actionable.`;
-    const generated = await gemini.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt });
+    const generated = await gemini.models.generateContent({ model: geminiModel, contents: prompt });
     const assistantContent = generated.text?.trim();
     if (!assistantContent) throw new Error('Gemini returned an empty response.');
     const { data: assistantMessage, error: assistantMessageError } = await supabase.from('messages').insert({ conversation_id: conversation.id, user_id: userId, role: 'assistant', content: assistantContent }).select().single();
