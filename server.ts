@@ -33,6 +33,7 @@ type StoredMessage = {
   role: 'parent' | 'assistant';
   content: string;
   created_at: string;
+  response_status: 'pending' | 'failed' | 'completed' | null;
 };
 
 function isContextSummaryRequest(message: string) {
@@ -100,6 +101,13 @@ async function findChatResponse(conversationId: string, clientRequestId: string)
   };
 }
 
+async function markChatRequest(parentMessageId: string, responseStatus: 'failed' | 'completed') {
+  const { error } = await supabase.from('messages')
+    .update({ response_status: responseStatus })
+    .eq('id', parentMessageId);
+  if (error) throw error;
+}
+
 app.post('/api/chat', async (request, response) => {
   const token = request.header('authorization')?.replace(/^Bearer\s+/i, '');
   const message = typeof request.body?.message === 'string' ? request.body.message.trim() : '';
@@ -113,6 +121,8 @@ app.post('/api/chat', async (request, response) => {
   const { data: authData, error: authError } = await supabase.auth.getUser(token);
   if (authError || !authData.user) return response.status(401).json({ error: 'Your session has expired. Please sign in again.' });
   const userId = authData.user.id;
+  let parentMessage: StoredMessage | null = null;
+  let responseSaved = false;
 
   try {
     const { data: profile, error: profileError } = await supabase.from('child_profiles').select().eq('user_id', userId).single();
@@ -123,28 +133,48 @@ app.post('/api/chat', async (request, response) => {
     if (existingChatResponse?.assistantMessage) {
       return response.status(200).json({ parentMessage: existingChatResponse.parentMessage, message: existingChatResponse.assistantMessage });
     }
-    if (existingChatResponse) return response.status(202).json({ status: 'processing' });
-
-    const { data: priorMessages, error: historyError } = await supabase.from('messages').select('role, content').eq('conversation_id', conversation.id).order('created_at', { ascending: false }).limit(20);
-    if (historyError) throw historyError;
-
-    const { data: parentMessage, error: parentMessageError } = await supabase.from('messages').insert({
-      conversation_id: conversation.id,
-      user_id: userId,
-      role: 'parent',
-      content: message,
-      client_request_id: clientRequestId,
-    }).select().single();
-    if (parentMessageError || !parentMessage) {
-      if (parentMessageError?.code === '23505') {
-        const duplicateChatResponse = await findChatResponse(conversation.id, clientRequestId);
-        if (duplicateChatResponse?.assistantMessage) {
-          return response.status(200).json({ parentMessage: duplicateChatResponse.parentMessage, message: duplicateChatResponse.assistantMessage });
-        }
-        return response.status(202).json({ status: 'processing' });
-      }
-      throw parentMessageError ?? new Error('Unable to save the message.');
+    if (existingChatResponse) {
+      if (existingChatResponse.parentMessage.response_status !== 'failed') return response.status(202).json({ status: 'processing' });
+      const { data: reclaimedParentMessage, error: reclaimError } = await supabase.from('messages')
+        .update({ response_status: 'pending' })
+        .eq('id', existingChatResponse.parentMessage.id)
+        .eq('response_status', 'failed')
+        .select()
+        .maybeSingle();
+      if (reclaimError) throw reclaimError;
+      if (!reclaimedParentMessage) return response.status(202).json({ status: 'processing' });
+      parentMessage = reclaimedParentMessage as StoredMessage;
     }
+
+    if (!parentMessage) {
+      const { data: createdParentMessage, error: parentMessageError } = await supabase.from('messages').insert({
+        conversation_id: conversation.id,
+        user_id: userId,
+        role: 'parent',
+        content: message,
+        client_request_id: clientRequestId,
+        response_status: 'pending',
+      }).select().single();
+      if (parentMessageError || !createdParentMessage) {
+        if (parentMessageError?.code === '23505') {
+          const duplicateChatResponse = await findChatResponse(conversation.id, clientRequestId);
+          if (duplicateChatResponse?.assistantMessage) {
+            return response.status(200).json({ parentMessage: duplicateChatResponse.parentMessage, message: duplicateChatResponse.assistantMessage });
+          }
+          return response.status(202).json({ status: 'processing' });
+        }
+        throw parentMessageError ?? new Error('Unable to save the message.');
+      }
+      parentMessage = createdParentMessage as StoredMessage;
+    }
+
+    const { data: priorMessages, error: historyError } = await supabase.from('messages')
+      .select('role, content')
+      .eq('conversation_id', conversation.id)
+      .neq('id', parentMessage.id)
+      .order('created_at', { ascending: false })
+      .limit(20);
+    if (historyError) throw historyError;
 
     if (isContextSummaryRequest(message)) {
       const { data: assistantMessage, error: assistantMessageError } = await supabase.from('messages').insert({
@@ -155,6 +185,8 @@ app.post('/api/chat', async (request, response) => {
         in_reply_to: parentMessage.id,
       }).select().single();
       if (assistantMessageError || !assistantMessage) throw assistantMessageError ?? new Error('Unable to save the response.');
+      responseSaved = true;
+      await markChatRequest(parentMessage.id, 'completed');
       await supabase.from('conversations').update({ updated_at: new Date().toISOString() }).eq('id', conversation.id);
       return response.status(200).json({ parentMessage, message: assistantMessage });
     }
@@ -168,6 +200,8 @@ app.post('/api/chat', async (request, response) => {
         in_reply_to: parentMessage.id,
       }).select().single();
       if (assistantMessageError || !assistantMessage) throw assistantMessageError ?? new Error('Unable to save the response.');
+      responseSaved = true;
+      await markChatRequest(parentMessage.id, 'completed');
       await supabase.from('conversations').update({ updated_at: new Date().toISOString() }).eq('id', conversation.id);
       return response.status(200).json({ parentMessage, message: assistantMessage });
     }
@@ -186,9 +220,18 @@ app.post('/api/chat', async (request, response) => {
       in_reply_to: parentMessage.id,
     }).select().single();
     if (assistantMessageError || !assistantMessage) throw assistantMessageError ?? new Error('Unable to save the response.');
+    responseSaved = true;
+    await markChatRequest(parentMessage.id, 'completed');
     await supabase.from('conversations').update({ updated_at: new Date().toISOString() }).eq('id', conversation.id);
     return response.status(200).json({ parentMessage, message: assistantMessage });
   } catch (error) {
+    if (parentMessage && !responseSaved) {
+      try {
+        await markChatRequest(parentMessage.id, 'failed');
+      } catch (statusError) {
+        console.error('Unable to mark failed chat request', statusError);
+      }
+    }
     console.error('Chat request failed', error);
     return response.status(500).json({ error: 'Cache could not respond right now. Please try again.' });
   }

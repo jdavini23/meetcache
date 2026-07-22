@@ -87,7 +87,7 @@ function ProfileForm({ initialProfile, onSave, onCancel }: ProfileFormProps) {
       </div>
       <div className="grid sm:grid-cols-2 gap-4">
         <label className="text-sm font-medium text-ink">Birth month<select value={birthMonth} onChange={(event) => setBirthMonth(event.target.value)} className="app-input mt-2" required><option value="">Choose month</option>{Array.from({ length: 12 }, (_, index) => <option key={index + 1} value={index + 1}>{new Date(2000, index, 1).toLocaleString('en', { month: 'long' })}</option>)}</select></label>
-        <label className="text-sm font-medium text-ink">Birth year<select value={birthYear} onChange={(event) => setBirthYear(event.target.value)} className="app-input mt-2" required><option value="">Choose year</option>{Array.from({ length: 8 }, (_, index) => currentYear - index).map((year) => <option key={year} value={year}>{year}</option>)}</select></label>
+        <label className="text-sm font-medium text-ink">Birth year<select value={birthYear} onChange={(event) => setBirthYear(event.target.value)} className="app-input mt-2" required><option value="">Choose year</option>{Array.from({ length: 19 }, (_, index) => currentYear - index).map((year) => <option key={year} value={year}>{year}</option>)}</select></label>
       </div>
       <label className="text-sm font-medium text-ink block">What are their usual routines?<textarea value={routines} onChange={(event) => setRoutines(event.target.value)} className="app-input mt-2 min-h-24" placeholder="Sleep, meals, preschool, transitions…" maxLength={1200} required /></label>
       <label className="text-sm font-medium text-ink block">What feels challenging right now?<textarea value={challenges} onChange={(event) => setChallenges(event.target.value)} className="app-input mt-2 min-h-24" placeholder="Bedtime, big feelings, separation…" maxLength={1200} required /></label>
@@ -168,6 +168,7 @@ export default function CacheApp() {
   const sendLock = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesListRef = useRef<HTMLDivElement>(null);
+  const contextDrawerRef = useRef<HTMLElement>(null);
   const isNearLatestRef = useRef(true);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const [hasUnreadMessages, setHasUnreadMessages] = useState(false);
@@ -213,6 +214,44 @@ export default function CacheApp() {
       setHasUnreadMessages(true);
     }
   }, [messages.length, sending]);
+
+  useEffect(() => {
+    if (!contextOpen) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const drawer = contextDrawerRef.current;
+    const focusableSelector = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
+    const focusableElements = (): HTMLElement[] => drawer
+      ? Array.from(drawer.querySelectorAll<HTMLElement>(focusableSelector))
+      : [];
+    const focusFirstElement = () => focusableElements()[0]?.focus();
+    focusFirstElement();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setContextOpen(false);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const elements = focusableElements();
+      if (elements.length === 0) return;
+      const firstElement = elements[0];
+      const lastElement = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === firstElement) {
+        event.preventDefault();
+        lastElement.focus();
+      } else if (!event.shiftKey && document.activeElement === lastElement) {
+        event.preventDefault();
+        firstElement.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, [contextOpen]);
 
   const requestMagicLink = async (event: FormEvent) => {
     event.preventDefault(); setNotice('');
@@ -313,7 +352,7 @@ export default function CacheApp() {
         <button onClick={() => void supabase.auth.signOut()} className="flex items-center gap-2 text-sm font-medium text-ink/65 hover:text-ink"><LogOut className="size-4" />Sign out</button>
       </header>
       <div className="mx-auto grid w-full min-h-0 max-w-5xl flex-1 gap-6 px-4 pb-4 sm:px-6 lg:grid-cols-[280px_1fr] lg:grid-rows-[minmax(0,1fr)] lg:pb-6">
-        {profile && <aside className="app-card hidden h-fit lg:block"><ContextPanel profile={profile} onEdit={() => setEditing(true)} /></aside>}
+        {profile && <aside className="app-card hidden h-fit max-h-full overflow-y-auto lg:block"><ContextPanel profile={profile} onEdit={() => setEditing(true)} /></aside>}
         <section className="app-card flex min-h-0 flex-col">
           <div className="shrink-0 border-b border-ink/10 pb-5">
             {hasMessages ? <>
@@ -359,9 +398,9 @@ export default function CacheApp() {
           </form>
         </section>
       </div>
-      {contextOpen && profile && <div className="fixed inset-0 z-30 lg:hidden" role="dialog" aria-modal="true" aria-label={`${profile.nickname}'s saved context`}>
+      {contextOpen && profile && <div className="fixed inset-0 z-30 lg:hidden">
         <button type="button" onClick={() => setContextOpen(false)} className="absolute inset-0 bg-ink/35" aria-label="Close saved context" />
-        <section className="absolute inset-x-0 bottom-0 max-h-[85dvh] overflow-y-auto rounded-t-[28px] bg-cream p-6 pb-8 shadow-[0_-12px_32px_-12px_rgba(43,38,34,0.28)]">
+        <section ref={contextDrawerRef} className="absolute inset-x-0 bottom-0 max-h-[85dvh] overflow-y-auto rounded-t-[28px] bg-cream p-6 pb-8 shadow-[0_-12px_32px_-12px_rgba(43,38,34,0.28)]" role="dialog" aria-modal="true" aria-label={`${profile.nickname}'s saved context`}>
           <button type="button" onClick={() => setContextOpen(false)} className="absolute right-5 top-5 rounded-lg p-2 text-ink/60 hover:bg-ink/5 hover:text-ink" aria-label="Close saved context"><X className="size-5" /></button>
           <div className="pr-10"><ContextPanel profile={profile} onEdit={() => { setContextOpen(false); setEditing(true); }} /></div>
         </section>
