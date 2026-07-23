@@ -2,19 +2,41 @@
 <img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
 </div>
 
-# Run and deploy your AI Studio app
+# Cache
 
-This contains everything you need to run your app locally.
-
-View your app in AI Studio: https://ai.studio/apps/5a681edc-6090-41f7-86d2-af971c48c2e6
+Cache is a passwordless AI parenting coach that retains a parent-provided child context. The landing page lives at `/`; the product lives at `/app`.
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
+**Prerequisites:** Node.js, a Supabase project, and a Gemini API key.
 
+1. Install dependencies: `npm install`
+2. Copy `.env.example` to `.env.local` and set every value.
+3. Apply the SQL migrations in `supabase/migrations/` to your Supabase project.
+4. In Supabase Auth, enable Email sign-in and add `http://localhost:3000/app` plus your production `/app` URL to **Redirect URLs**.
+5. Start the API in one terminal: `npm run dev:api`
+6. Start Vite in another terminal: `npm run dev`
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+For production, `npm run build` compiles both the client and API into `dist/`.
+Run the combined server with `npm start`.
+
+## Testing
+
+- `npm test` runs unit, component, and mocked API tests.
+- `npm run test:e2e` runs the Chromium browser smoke tests.
+- `npm run test:all` runs both suites.
+
+The test suite uses mocked Supabase and Gemini responses, so it does not require local secrets or access to production services.
+
+## Security notes
+
+- `VITE_SUPABASE_*` values are intentionally browser-visible. `SUPABASE_SERVICE_ROLE_KEY` and `GEMINI_API_KEY` must only be available to `server.ts`.
+- `GEMINI_MODEL` defaults to `gemini-3.6-flash`, so the server model can be updated without changing application code.
+- Chat generation defaults to 10 attempts per user per 60 seconds. Configure
+  `CHAT_RATE_LIMIT_MAX` and `CHAT_RATE_LIMIT_WINDOW_SECONDS` to change that
+  durable database-backed limit.
+- Each account is also limited to 100 response attempts per UTC day by default.
+  Configure `CHAT_DAILY_LIMIT_MAX` to adjust that cost ceiling.
+- Pending requests older than `CHAT_REQUEST_STALE_SECONDS` (90 seconds by
+  default) can be reclaimed safely after an interrupted server request.
+- The chat endpoint verifies a Supabase access token, reads the caller's profile, and persists messages server-side. Database row-level security keeps browser access scoped to its owner.
