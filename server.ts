@@ -6,25 +6,19 @@ import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai';
 import { formatChildAge } from './src/lib/childAge';
 
-dotenv.config();
-dotenv.config({ path: '.env.local', override: true });
-
 const required = (name: string) => {
   const value = process.env[name];
   if (!value) throw new Error(`${name} must be configured.`);
   return value;
 };
 
-const supabaseUrl = required('SUPABASE_URL');
-const serviceRoleKey = required('SUPABASE_SERVICE_ROLE_KEY');
-const geminiApiKey = required('GEMINI_API_KEY');
-const geminiModel = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
-const supabase = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
-const gemini = new GoogleGenAI({ apiKey: geminiApiKey });
-const app = express();
-const port = Number(process.env.PORT ?? 3000);
-
-app.use(express.json({ limit: '20kb' }));
+type AppDependencies = {
+  // The application uses the service-role client dynamically across several tables.
+  // Keep this boundary structural so tests can inject a lightweight fake client.
+  supabase: any;
+  gemini: GoogleGenAI;
+  geminiModel: string;
+};
 
 type StoredMessage = {
   id: string;
@@ -35,21 +29,6 @@ type StoredMessage = {
   created_at: string;
   response_status: 'pending' | 'failed' | 'completed' | null;
 };
-
-function isContextSummaryRequest(message: string) {
-  const normalized = message.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
-  return /\bwhat do you know\b/.test(normalized)
-    && /\b(my|about|saved|profile|context)\b/.test(normalized);
-}
-
-function isSimpleGreeting(message: string) {
-  const normalized = message.toLowerCase().replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim();
-  return /^(hi|hello|hey|hiya|good morning|good afternoon|good evening)( there)?$/.test(normalized);
-}
-
-function isUrgentSafetyConcern(message: string) {
-  return /\b(not breathing|trouble breathing|blue lips|unconscious|seizure|overdose|poison(?:ed|ing)?|swallowed (?:a |the )?(?:pill|battery|magnet)|suicid(?:e|al)|self[ -]?harm|kill myself|hurt (?:myself|someone)|abuse|unsafe at home)\b/i.test(message);
-}
 
 function greetingResponse(nickname: string) {
   return `Hi — I’m here to help you think things through with ${nickname}. What feels most challenging right now?`;
@@ -79,7 +58,26 @@ function savedContextResponse(profile: {
   return `Here’s the context I have saved for ${profile.nickname}:\n\n${details.map((detail) => `• ${detail}`).join('\n')}\n\nWould you like to update anything?`;
 }
 
-async function findChatResponse(conversationId: string, clientRequestId: string) {
+export function isContextSummaryRequest(message: string) {
+  const normalized = message.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  return /\bwhat do you know\b/.test(normalized)
+    && /\b(my|about|saved|profile|context)\b/.test(normalized);
+}
+
+export function isSimpleGreeting(message: string) {
+  const normalized = message.toLowerCase().replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  return /^(hi|hello|hey|hiya|good morning|good afternoon|good evening)( there)?$/.test(normalized);
+}
+
+export function isUrgentSafetyConcern(message: string) {
+  return /\b(not breathing|trouble breathing|blue lips|unconscious|seizure|overdose|poison(?:ed|ing)?|swallowed (?:a |the )?(?:pill|battery|magnet)|suicid(?:e|al)|self[ -]?harm|kill myself|hurt (?:myself|someone)|abuse|unsafe at home)\b/i.test(message);
+}
+
+export function createApp({ supabase, gemini, geminiModel }: AppDependencies) {
+  const app = express();
+  app.use(express.json({ limit: '20kb' }));
+
+  async function findChatResponse(conversationId: string, clientRequestId: string) {
   const { data: parentMessage, error: parentMessageError } = await supabase.from('messages')
     .select()
     .eq('conversation_id', conversationId)
@@ -99,16 +97,16 @@ async function findChatResponse(conversationId: string, clientRequestId: string)
     parentMessage: parentMessage as StoredMessage,
     assistantMessage: assistantMessage as StoredMessage | null,
   };
-}
+  }
 
-async function markChatRequest(parentMessageId: string, responseStatus: 'failed' | 'completed') {
+  async function markChatRequest(parentMessageId: string, responseStatus: 'failed' | 'completed') {
   const { error } = await supabase.from('messages')
     .update({ response_status: responseStatus })
     .eq('id', parentMessageId);
   if (error) throw error;
-}
+  }
 
-app.post('/api/chat', async (request, response) => {
+  app.post('/api/chat', async (request, response) => {
   const token = request.header('authorization')?.replace(/^Bearer\s+/i, '');
   const message = typeof request.body?.message === 'string' ? request.body.message.trim() : '';
   const clientRequestId = typeof request.body?.clientRequestId === 'string' ? request.body.clientRequestId : '';
@@ -235,13 +233,31 @@ app.post('/api/chat', async (request, response) => {
     console.error('Chat request failed', error);
     return response.status(500).json({ error: 'Cache could not respond right now. Please try again.' });
   }
-});
+  });
 
-if (process.env.NODE_ENV === 'production') {
+  return app;
+}
+
+function startServer() {
+  dotenv.config();
+  dotenv.config({ path: '.env.local', override: true });
+  const supabaseUrl = required('SUPABASE_URL');
+  const serviceRoleKey = required('SUPABASE_SERVICE_ROLE_KEY');
+  const geminiApiKey = required('GEMINI_API_KEY');
+  const geminiModel = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+  const supabase = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
+  const gemini = new GoogleGenAI({ apiKey: geminiApiKey });
+  const app = createApp({ supabase, gemini, geminiModel });
+  const port = Number(process.env.PORT ?? 3000);
+
+  if (process.env.NODE_ENV === 'production') {
   const directory = path.dirname(fileURLToPath(import.meta.url));
   const distPath = path.join(directory, 'dist');
   app.use(express.static(distPath));
   app.get('*', (_request, response) => response.sendFile(path.join(distPath, 'index.html')));
+  }
+
+  app.listen(port, () => console.log(`Cache server listening on port ${port}`));
 }
 
-app.listen(port, () => console.log(`Cache server listening on port ${port}`));
+if (!process.env.VITEST) startServer();

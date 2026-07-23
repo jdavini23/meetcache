@@ -19,6 +19,14 @@ Cache is a passwordless AI parenting coach that retains a parent-provided child 
 
 For production, build the client with `npm run build` and run the combined server with `npm start`.
 
+## Testing
+
+- `npm test` runs unit, component, and mocked API tests.
+- `npm run test:e2e` runs the Chromium browser smoke tests.
+- `npm run test:all` runs both suites.
+
+The test suite uses mocked Supabase and Gemini responses, so it does not require local secrets or access to production services.
+
 ## Security notes
 
 - `VITE_SUPABASE_*` values are intentionally browser-visible. `SUPABASE_SERVICE_ROLE_KEY` and `GEMINI_API_KEY` must only be available to `server.ts`.
