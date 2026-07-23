@@ -17,7 +17,8 @@ Cache is a passwordless AI parenting coach that retains a parent-provided child 
 5. Start the API in one terminal: `npm run dev:api`
 6. Start Vite in another terminal: `npm run dev`
 
-For production, build the client with `npm run build` and run the combined server with `npm start`.
+For production, `npm run build` compiles both the client and API into `dist/`.
+Run the combined server with `npm start`.
 
 ## Testing
 
@@ -31,4 +32,11 @@ The test suite uses mocked Supabase and Gemini responses, so it does not require
 
 - `VITE_SUPABASE_*` values are intentionally browser-visible. `SUPABASE_SERVICE_ROLE_KEY` and `GEMINI_API_KEY` must only be available to `server.ts`.
 - `GEMINI_MODEL` defaults to `gemini-3.6-flash`, so the server model can be updated without changing application code.
+- Chat generation defaults to 10 attempts per user per 60 seconds. Configure
+  `CHAT_RATE_LIMIT_MAX` and `CHAT_RATE_LIMIT_WINDOW_SECONDS` to change that
+  durable database-backed limit.
+- Each account is also limited to 100 response attempts per UTC day by default.
+  Configure `CHAT_DAILY_LIMIT_MAX` to adjust that cost ceiling.
+- Pending requests older than `CHAT_REQUEST_STALE_SECONDS` (90 seconds by
+  default) can be reclaimed safely after an interrupted server request.
 - The chat endpoint verifies a Supabase access token, reads the caller's profile, and persists messages server-side. Database row-level security keeps browser access scoped to its owner.

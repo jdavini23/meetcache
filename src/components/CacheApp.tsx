@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useRef, useState } from 'react';
 import { AlertCircle, ArrowRight, ChevronUp, Info, Loader2, LogOut, Pencil, Send, ShieldCheck, X } from 'lucide-react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
-import { formatChildAge } from '../lib/childAge';
+import { formatChildAge, isChildAgeSupported } from '../lib/childAge';
 import type { ChildProfile, Conversation, Message } from '../lib/types';
 import ChatMarkdown from './ChatMarkdown';
 
@@ -56,8 +56,8 @@ function ProfileForm({ initialProfile, onSave, onCancel }: ProfileFormProps) {
     event.preventDefault();
     const month = Number(birthMonth);
     const year = Number(birthYear);
-    if (!nickname.trim() || !routines.trim() || !challenges.trim() || month < 1 || month > 12 || year < currentYear - 18 || year > currentYear) {
-      setError('Please complete each required field with a valid birth month and year.');
+    if (!nickname.trim() || !routines.trim() || !challenges.trim() || month < 1 || month > 12 || !isChildAgeSupported(month, year)) {
+      setError('Cache currently supports children ages 1 through 6. Please check the birth month and year.');
       return;
     }
 
@@ -87,7 +87,7 @@ function ProfileForm({ initialProfile, onSave, onCancel }: ProfileFormProps) {
       </div>
       <div className="grid sm:grid-cols-2 gap-4">
         <label className="text-sm font-medium text-ink">Birth month<select value={birthMonth} onChange={(event) => setBirthMonth(event.target.value)} className="app-input mt-2" required><option value="">Choose month</option>{Array.from({ length: 12 }, (_, index) => <option key={index + 1} value={index + 1}>{new Date(2000, index, 1).toLocaleString('en', { month: 'long' })}</option>)}</select></label>
-        <label className="text-sm font-medium text-ink">Birth year<select value={birthYear} onChange={(event) => setBirthYear(event.target.value)} className="app-input mt-2" required><option value="">Choose year</option>{Array.from({ length: 19 }, (_, index) => currentYear - index).map((year) => <option key={year} value={year}>{year}</option>)}</select></label>
+        <label className="text-sm font-medium text-ink">Birth year<select value={birthYear} onChange={(event) => setBirthYear(event.target.value)} className="app-input mt-2" required><option value="">Choose year</option>{Array.from({ length: 8 }, (_, index) => currentYear - index).map((year) => <option key={year} value={year}>{year}</option>)}</select></label>
       </div>
       <label className="text-sm font-medium text-ink block">What are their usual routines?<textarea value={routines} onChange={(event) => setRoutines(event.target.value)} className="app-input mt-2 min-h-24" placeholder="Sleep, meals, preschool, transitions…" maxLength={1200} required /></label>
       <label className="text-sm font-medium text-ink block">What feels challenging right now?<textarea value={challenges} onChange={(event) => setChallenges(event.target.value)} className="app-input mt-2 min-h-24" placeholder="Bedtime, big feelings, separation…" maxLength={1200} required /></label>

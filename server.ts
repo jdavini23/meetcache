@@ -1,7 +1,6 @@
 import dotenv from 'dotenv';
 import express from 'express';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai';
 import { formatChildAge } from './src/lib/childAge';
@@ -18,6 +17,10 @@ type AppDependencies = {
   supabase: any;
   gemini: GoogleGenAI;
   geminiModel: string;
+  rateLimitMax?: number;
+  rateLimitWindowSeconds?: number;
+  dailyLimitMax?: number;
+  staleRequestSeconds?: number;
 };
 
 type StoredMessage = {
@@ -28,6 +31,7 @@ type StoredMessage = {
   content: string;
   created_at: string;
   response_status: 'pending' | 'failed' | 'completed' | null;
+  processing_started_at: string | null;
 };
 
 function greetingResponse(nickname: string) {
@@ -73,7 +77,31 @@ export function isUrgentSafetyConcern(message: string) {
   return /\b(not breathing|trouble breathing|blue lips|unconscious|seizure|overdose|poison(?:ed|ing)?|swallowed (?:a |the )?(?:pill|battery|magnet)|suicid(?:e|al)|self[ -]?harm|kill myself|hurt (?:myself|someone)|abuse|unsafe at home)\b/i.test(message);
 }
 
-export function createApp({ supabase, gemini, geminiModel }: AppDependencies) {
+export function isStalePendingRequest(
+  message: Pick<StoredMessage, 'response_status' | 'processing_started_at' | 'created_at'>,
+  staleRequestSeconds: number,
+  now = new Date(),
+) {
+  if (message.response_status !== 'pending') return false;
+  const processingStartedAt = new Date(message.processing_started_at ?? message.created_at).getTime();
+  return Number.isFinite(processingStartedAt)
+    && processingStartedAt <= now.getTime() - staleRequestSeconds * 1000;
+}
+
+function positiveInteger(value: string | undefined, fallback: number) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export function createApp({
+  supabase,
+  gemini,
+  geminiModel,
+  rateLimitMax = 10,
+  rateLimitWindowSeconds = 60,
+  dailyLimitMax = 100,
+  staleRequestSeconds = 90,
+}: AppDependencies) {
   const app = express();
   app.use(express.json({ limit: '20kb' }));
 
@@ -131,14 +159,52 @@ export function createApp({ supabase, gemini, geminiModel }: AppDependencies) {
     if (existingChatResponse?.assistantMessage) {
       return response.status(200).json({ parentMessage: existingChatResponse.parentMessage, message: existingChatResponse.assistantMessage });
     }
+
     if (existingChatResponse) {
-      if (existingChatResponse.parentMessage.response_status !== 'failed') return response.status(202).json({ status: 'processing' });
-      const { data: reclaimedParentMessage, error: reclaimError } = await supabase.from('messages')
-        .update({ response_status: 'pending' })
+      const isFailed = existingChatResponse.parentMessage.response_status === 'failed';
+      const isStale = isStalePendingRequest(existingChatResponse.parentMessage, staleRequestSeconds);
+      if (!isFailed && !isStale) return response.status(202).json({ status: 'processing' });
+    }
+
+    const { data: rateLimitAllowed, error: rateLimitError } = await supabase.rpc('consume_chat_rate_limit', {
+      p_user_id: userId,
+      p_max_requests: rateLimitMax,
+      p_window_seconds: rateLimitWindowSeconds,
+    });
+    if (rateLimitError) throw rateLimitError;
+    if (!rateLimitAllowed) {
+      response.setHeader('Retry-After', String(rateLimitWindowSeconds));
+      return response.status(429).json({ error: 'Cache is receiving a lot of messages. Please wait a moment and try again.' });
+    }
+
+    const { data: dailyLimitAllowed, error: dailyLimitError } = await supabase.rpc('consume_daily_chat_quota', {
+      p_user_id: userId,
+      p_max_requests: dailyLimitMax,
+    });
+    if (dailyLimitError) throw dailyLimitError;
+    if (!dailyLimitAllowed) {
+      response.setHeader('Retry-After', '3600');
+      return response.status(429).json({ error: 'Cache has reached today’s message limit. Please try again tomorrow.' });
+    }
+
+    if (existingChatResponse) {
+      const expectedStatus = existingChatResponse.parentMessage.response_status;
+      let reclaimRequest = supabase.from('messages')
+        .update({
+          response_status: 'pending',
+          processing_started_at: new Date().toISOString(),
+        })
         .eq('id', existingChatResponse.parentMessage.id)
-        .eq('response_status', 'failed')
-        .select()
-        .maybeSingle();
+        .eq('response_status', expectedStatus);
+
+      if (expectedStatus === 'pending') {
+        reclaimRequest = reclaimRequest.lt(
+          'processing_started_at',
+          new Date(Date.now() - staleRequestSeconds * 1000).toISOString(),
+        );
+      }
+
+      const { data: reclaimedParentMessage, error: reclaimError } = await reclaimRequest.select().maybeSingle();
       if (reclaimError) throw reclaimError;
       if (!reclaimedParentMessage) return response.status(202).json({ status: 'processing' });
       parentMessage = reclaimedParentMessage as StoredMessage;
@@ -152,6 +218,7 @@ export function createApp({ supabase, gemini, geminiModel }: AppDependencies) {
         content: message,
         client_request_id: clientRequestId,
         response_status: 'pending',
+        processing_started_at: new Date().toISOString(),
       }).select().single();
       if (parentMessageError || !createdParentMessage) {
         if (parentMessageError?.code === '23505') {
@@ -245,14 +312,25 @@ function startServer() {
   const serviceRoleKey = required('SUPABASE_SERVICE_ROLE_KEY');
   const geminiApiKey = required('GEMINI_API_KEY');
   const geminiModel = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+  const rateLimitMax = positiveInteger(process.env.CHAT_RATE_LIMIT_MAX, 10);
+  const rateLimitWindowSeconds = positiveInteger(process.env.CHAT_RATE_LIMIT_WINDOW_SECONDS, 60);
+  const dailyLimitMax = positiveInteger(process.env.CHAT_DAILY_LIMIT_MAX, 100);
+  const staleRequestSeconds = positiveInteger(process.env.CHAT_REQUEST_STALE_SECONDS, 90);
   const supabase = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
   const gemini = new GoogleGenAI({ apiKey: geminiApiKey });
-  const app = createApp({ supabase, gemini, geminiModel });
+  const app = createApp({
+    supabase,
+    gemini,
+    geminiModel,
+    rateLimitMax,
+    rateLimitWindowSeconds,
+    dailyLimitMax,
+    staleRequestSeconds,
+  });
   const port = Number(process.env.PORT ?? 3000);
 
   if (process.env.NODE_ENV === 'production') {
-  const directory = path.dirname(fileURLToPath(import.meta.url));
-  const distPath = path.join(directory, 'dist');
+  const distPath = path.resolve(process.cwd(), 'dist');
   app.use(express.static(distPath));
   app.get('*', (_request, response) => response.sendFile(path.join(distPath, 'index.html')));
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatChildAge } from './childAge';
+import { formatChildAge, isChildAgeSupported } from './childAge';
 
 describe('formatChildAge', () => {
   const now = new Date(2026, 6, 22);
@@ -16,5 +16,12 @@ describe('formatChildAge', () => {
 
   it('does not report a negative age for a future birth month', () => {
     expect(formatChildAge(12, 2026, now)).toBe('0 months old');
+  });
+
+  it('supports children from their first through sixth years', () => {
+    expect(isChildAgeSupported(7, 2025, now)).toBe(true);
+    expect(isChildAgeSupported(8, 2019, now)).toBe(true);
+    expect(isChildAgeSupported(8, 2025, now)).toBe(false);
+    expect(isChildAgeSupported(7, 2019, now)).toBe(false);
   });
 });
