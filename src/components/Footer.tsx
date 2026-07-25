@@ -32,6 +32,8 @@ export default function Footer() {
             meetcache.com
           </a>
           <span className="hidden sm:inline text-ink/20">•</span>
+          <a href="/privacy" className="hover:text-terracotta hover:underline transition-colors duration-200">Privacy</a>
+          <span className="hidden sm:inline text-ink/20">•</span>
           <span>&copy; {currentYear} Cache</span>
         </div>
       </div>

@@ -32,3 +32,10 @@ test('the app requests a magic link with a mocked Supabase response', async ({ p
 
   await expect(page.getByText('Check your email for a secure sign-in link.')).toBeVisible();
 });
+
+test('the privacy page explains account data controls', async ({ page }) => {
+  await page.goto('/privacy');
+
+  await expect(page.getByRole('heading', { name: /privacy and your data/i })).toBeVisible();
+  await expect(page.getByText(/download a copy of your saved context and chat history/i)).toBeVisible();
+});

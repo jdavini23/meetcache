@@ -7,9 +7,11 @@ import Difference from './components/Difference';
 import FinalCTA from './components/FinalCTA';
 import Footer from './components/Footer';
 import CacheApp from './components/CacheApp';
+import Privacy from './components/Privacy';
 
 export default function App() {
   if (window.location.pathname.startsWith('/app')) return <CacheApp />;
+  if (window.location.pathname === '/privacy') return <Privacy />;
   const handleScrollToSignup = () => {
     // Scroll to the main waitlist registration form container in the hero section
     const formElement = document.getElementById('hero-form-container');

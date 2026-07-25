@@ -27,4 +27,7 @@ export interface Message {
   role: 'parent' | 'assistant';
   content: string;
   created_at: string;
+  client_request_id?: string | null;
+  response_status?: 'pending' | 'failed' | 'completed' | null;
+  processing_started_at?: string | null;
 }

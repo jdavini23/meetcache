@@ -1,4 +1,5 @@
-import { FormEvent, useEffect, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import type { RefObject } from 'react';
 import { AlertCircle, ArrowRight, ChevronUp, Info, Loader2, LogOut, Pencil, Send, ShieldCheck, X } from 'lucide-react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
@@ -34,6 +35,66 @@ const starterPrompts = [
   'What can I try when big feelings show up?',
   'How can I make a transition feel easier?',
 ];
+
+const CHAT_POLL_INTERVAL_MS = 1_000;
+const CHAT_ATTEMPT_TIMEOUT_MS = 10_000;
+const CHAT_REQUEST_TIMEOUT_MS = 95_000;
+
+class ChatRequestError extends Error {
+  requestId?: string;
+
+  constructor(message: string, requestId?: string) {
+    super(message);
+    this.name = 'ChatRequestError';
+    this.requestId = requestId;
+  }
+}
+
+const wait = (duration: number) => new Promise((resolve) => window.setTimeout(resolve, duration));
+
+function useModalFocus(
+  isOpen: boolean,
+  dialogRef: RefObject<HTMLElement | null>,
+  onClose: () => void,
+  initialFocusRef?: RefObject<HTMLElement | null>,
+) {
+  useEffect(() => {
+    if (!isOpen) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = dialogRef.current;
+    const focusableSelector = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
+    const focusableElements = (): HTMLElement[] => dialog
+      ? Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector))
+      : [];
+    (initialFocusRef?.current ?? focusableElements()[0])?.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const elements = focusableElements();
+      if (elements.length === 0) return;
+      const firstElement = elements[0];
+      const lastElement = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === firstElement) {
+        event.preventDefault();
+        lastElement.focus();
+      } else if (!event.shiftKey && document.activeElement === lastElement) {
+        event.preventDefault();
+        firstElement.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, [dialogRef, initialFocusRef, isOpen, onClose]);
+}
 
 interface ProfileFormProps {
   initialProfile?: ChildProfile;
@@ -152,6 +213,30 @@ function ContextPanel({ profile, onEdit }: ContextPanelProps) {
   </>;
 }
 
+interface AccountPanelProps {
+  exporting: boolean;
+  deleting: boolean;
+  deleteConfirmation: string;
+  onExport: () => void;
+  onDeleteConfirmationChange: (value: string) => void;
+  onDelete: () => void;
+}
+
+function AccountPanel({ exporting, deleting, deleteConfirmation, onExport, onDeleteConfirmationChange, onDelete }: AccountPanelProps) {
+  return <>
+    <p className="app-eyebrow">Your account</p>
+    <h2 className="mt-2 font-serif text-2xl">Data and privacy</h2>
+    <p className="mt-3 text-sm leading-relaxed text-ink/70">Download your saved context and chat history, or permanently delete your Cache account and application data.</p>
+    <button type="button" onClick={onExport} disabled={exporting || deleting} className="app-button mt-6">{exporting ? <Loader2 className="size-4 animate-spin" /> : null}{exporting ? 'Preparing download…' : 'Download my data'}</button>
+    <div className="mt-8 border-t border-red-700/20 pt-6">
+      <h3 className="font-serif text-xl text-red-800">Delete account</h3>
+      <p className="mt-2 text-sm leading-relaxed text-ink/70">This immediately removes your Cache account, saved child context, and conversation history. Provider backups follow their normal retention lifecycle.</p>
+      <label className="mt-4 block text-sm font-medium text-ink" htmlFor="delete-confirmation">Type DELETE to confirm<input id="delete-confirmation" className="app-input mt-2" value={deleteConfirmation} onChange={(event) => onDeleteConfirmationChange(event.target.value)} autoComplete="off" /></label>
+      <button type="button" onClick={onDelete} disabled={deleting || deleteConfirmation !== 'DELETE'} className="mt-4 rounded-xl bg-red-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-50">{deleting ? 'Deleting account…' : 'Delete my account and data'}</button>
+    </div>
+  </>;
+}
+
 export default function CacheApp() {
   const [appState, setAppState] = useState<AppState>('loading');
   const [session, setSession] = useState<Session | null>(null);
@@ -164,14 +249,27 @@ export default function CacheApp() {
   const [sending, setSending] = useState(false);
   const [editing, setEditing] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
   const [failedChatRequest, setFailedChatRequest] = useState<FailedChatRequest | null>(null);
   const sendLock = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesListRef = useRef<HTMLDivElement>(null);
   const contextDrawerRef = useRef<HTMLElement>(null);
+  const accountDialogRef = useRef<HTMLElement>(null);
+  const accountCloseButtonRef = useRef<HTMLButtonElement>(null);
+  const accountButtonRef = useRef<HTMLButtonElement>(null);
   const isNearLatestRef = useRef(true);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const [hasUnreadMessages, setHasUnreadMessages] = useState(false);
+
+  const closeContext = useCallback(() => setContextOpen(false), []);
+  const closeAccount = useCallback(() => {
+    setAccountOpen(false);
+    setDeleteConfirmation('');
+  }, []);
 
   const loadAccount = async (activeSession: Session) => {
     setAppState('loading');
@@ -191,7 +289,15 @@ export default function CacheApp() {
     setConversation(activeConversation);
     const { data: messageData, error: messageError } = await supabase.from('messages').select().eq('conversation_id', activeConversation.id).order('created_at');
     if (messageError) { setNotice('We could not load earlier messages.'); }
-    setMessages((messageData ?? []) as Message[]);
+    const savedMessages = (messageData ?? []) as Message[];
+    setMessages(savedMessages);
+    const incompleteMessage = [...savedMessages].reverse().find((message) => message.role === 'parent'
+      && message.client_request_id
+      && (message.response_status === 'pending' || message.response_status === 'failed'));
+    if (incompleteMessage?.client_request_id) {
+      setFailedChatRequest({ content: incompleteMessage.content, clientRequestId: incompleteMessage.client_request_id });
+      setNotice('Cache still has an unfinished response. You can safely try again without sending your message twice.');
+    }
     setAppState('ready');
   };
 
@@ -215,43 +321,8 @@ export default function CacheApp() {
     }
   }, [messages.length, sending]);
 
-  useEffect(() => {
-    if (!contextOpen) return;
-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const drawer = contextDrawerRef.current;
-    const focusableSelector = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
-    const focusableElements = (): HTMLElement[] => drawer
-      ? Array.from(drawer.querySelectorAll<HTMLElement>(focusableSelector))
-      : [];
-    const focusFirstElement = () => focusableElements()[0]?.focus();
-    focusFirstElement();
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        setContextOpen(false);
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const elements = focusableElements();
-      if (elements.length === 0) return;
-      const firstElement = elements[0];
-      const lastElement = elements[elements.length - 1];
-      if (event.shiftKey && document.activeElement === firstElement) {
-        event.preventDefault();
-        lastElement.focus();
-      } else if (!event.shiftKey && document.activeElement === lastElement) {
-        event.preventDefault();
-        firstElement.focus();
-      }
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      previouslyFocused?.focus();
-    };
-  }, [contextOpen]);
+  useModalFocus(contextOpen, contextDrawerRef, closeContext);
+  useModalFocus(accountOpen, accountDialogRef, closeAccount, accountCloseButtonRef);
 
   const requestMagicLink = async (event: FormEvent) => {
     event.preventDefault(); setNotice('');
@@ -267,21 +338,58 @@ export default function CacheApp() {
   };
 
   const requestChatResponse = async (content: string, clientRequestId: string) => {
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token ?? ''}` },
-        body: JSON.stringify({ message: content, clientRequestId }),
-      });
-      const body = await response.json() as { parentMessage?: Message; message?: Message; error?: string; status?: string };
+    const startedAt = Date.now();
+    let lastRequestId: string | undefined;
+    while (Date.now() - startedAt < CHAT_REQUEST_TIMEOUT_MS) {
+      let response: Response;
+      const controller = new AbortController();
+      const remainingTime = CHAT_REQUEST_TIMEOUT_MS - (Date.now() - startedAt);
+      const abortTimer = window.setTimeout(
+        () => controller.abort(),
+        Math.min(CHAT_ATTEMPT_TIMEOUT_MS, remainingTime),
+      );
+      try {
+        response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token ?? ''}` },
+          body: JSON.stringify({ message: content, clientRequestId }),
+          signal: controller.signal,
+        });
+      } catch {
+        await wait(CHAT_POLL_INTERVAL_MS);
+        continue;
+      } finally {
+        window.clearTimeout(abortTimer);
+      }
+
+      lastRequestId = response.headers.get('X-Request-ID') ?? undefined;
+      const contentType = response.headers.get('content-type') ?? '';
+      let body: { parentMessage?: Message; message?: Message; error?: string; status?: string; requestId?: string } = {};
+      if (contentType.includes('application/json')) {
+        try {
+          body = await response.json() as typeof body;
+        } catch {
+          throw new ChatRequestError('Cache returned an unexpected response. Please try again.', lastRequestId);
+        }
+      }
+
       if (response.status === 202 && body.status === 'processing') {
-        await new Promise((resolve) => window.setTimeout(resolve, 500));
+        await wait(CHAT_POLL_INTERVAL_MS);
         continue;
       }
-      if (!response.ok || !body.message || !body.parentMessage) throw new Error(body.error);
+      if (response.status === 429) {
+        const retryAfter = Number(response.headers.get('Retry-After'));
+        const readableDelay = Number.isFinite(retryAfter) && retryAfter > 0
+          ? ` Please wait about ${retryAfter >= 60 ? `${Math.ceil(retryAfter / 60)} minute${retryAfter >= 120 ? 's' : ''}` : `${retryAfter} seconds`} before trying again.`
+          : '';
+        throw new ChatRequestError(`${body.error ?? 'Cache needs a short pause.'}${readableDelay}`, lastRequestId);
+      }
+      if (!response.ok || !body.message || !body.parentMessage) {
+        throw new ChatRequestError(body.error ?? 'Cache could not respond right now. Please try again.', lastRequestId);
+      }
       return body;
     }
-    throw new Error('Cache is still preparing this response.');
+    throw new ChatRequestError('Cache is still preparing this response. Please try again; your message will not be sent twice.', lastRequestId);
   };
 
   const sendChatMessage = async (content: string, clientRequestId: string, showOptimisticMessage: boolean) => {
@@ -306,10 +414,54 @@ export default function CacheApp() {
         if (pendingMessageIndex === -1) return [...current, body.parentMessage!, body.message!];
         return [...current.slice(0, pendingMessageIndex), body.parentMessage!, body.message!, ...current.slice(pendingMessageIndex + 1)];
       });
-    } catch {
+    } catch (error) {
       setFailedChatRequest({ content, clientRequestId });
-      setNotice('Cache could not respond just now. Your message is still here—please try again.');
+      const requestId = error instanceof ChatRequestError ? error.requestId : undefined;
+      setNotice(`${error instanceof Error ? error.message : 'Cache could not respond just now. Your message is still here—please try again.'}${requestId ? `\nReference: ${requestId}` : ''}`);
     } finally { sendLock.current = false; setSending(false); }
+  };
+
+  const downloadData = async () => {
+    if (!session || exporting || deleting) return;
+    setExporting(true);
+    setNotice('');
+    try {
+      const response = await fetch('/api/account/export', { headers: { Authorization: `Bearer ${session.access_token}` } });
+      if (response.status === 404) {
+        throw new Error('This Cache server needs to be restarted or redeployed before data downloads are available.');
+      }
+      if (!response.ok) throw new Error('Cache could not prepare your download right now.');
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'cache-data-export.json';
+      link.click();
+      URL.revokeObjectURL(url);
+      setNotice('Your Cache data download is ready.');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Cache could not prepare your download right now.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const deleteAccount = async () => {
+    if (!session || deleteConfirmation !== 'DELETE' || deleting) return;
+    setDeleting(true);
+    setNotice('');
+    try {
+      const response = await fetch('/api/account', { method: 'DELETE', headers: { Authorization: `Bearer ${session.access_token}` } });
+      if (response.status === 404) {
+        throw new Error('This Cache server needs to be restarted or redeployed before account deletion is available.');
+      }
+      if (!response.ok) throw new Error('Cache could not delete your account right now.');
+      await supabase.auth.signOut({ scope: 'local' });
+      window.location.assign('/');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Cache could not delete your account right now.');
+      setDeleting(false);
+    }
   };
 
   const sendMessage = (event: FormEvent) => {
@@ -349,7 +501,10 @@ export default function CacheApp() {
     <main className="app-shell flex h-dvh min-h-dvh flex-col overflow-hidden">
       <header className="mx-auto flex w-full max-w-5xl shrink-0 items-center justify-between px-6 py-6">
         <a href="/" className="font-serif text-2xl font-semibold">Cache<span className="text-terracotta">.</span></a>
-        <button onClick={() => void supabase.auth.signOut()} className="flex items-center gap-2 text-sm font-medium text-ink/65 hover:text-ink"><LogOut className="size-4" />Sign out</button>
+        <div className="flex items-center gap-4">
+          <button ref={accountButtonRef} type="button" onClick={() => setAccountOpen(true)} className="text-sm font-medium text-ink/65 hover:text-ink">Account</button>
+          <button onClick={() => void supabase.auth.signOut({ scope: 'local' })} className="flex items-center gap-2 text-sm font-medium text-ink/65 hover:text-ink"><LogOut className="size-4" />Sign out</button>
+        </div>
       </header>
       <div className="mx-auto grid w-full min-h-0 max-w-5xl flex-1 gap-6 px-4 pb-4 sm:px-6 lg:grid-cols-[280px_1fr] lg:grid-rows-[minmax(0,1fr)] lg:pb-6">
         {profile && <aside className="app-card hidden h-fit max-h-full overflow-y-auto lg:block"><ContextPanel profile={profile} onEdit={() => setEditing(true)} /></aside>}
@@ -363,12 +518,12 @@ export default function CacheApp() {
               </div>
               <details className="mt-2 text-xs text-ink/60">
                 <summary className="flex w-fit cursor-pointer items-center gap-1.5 font-medium hover:text-ink"><Info className="size-3.5" />Guidance details</summary>
-                <p className="mt-2 max-w-xl leading-relaxed">Cache offers general parenting guidance, not medical, mental-health, or emergency care.</p>
+                <p className="mt-2 max-w-xl leading-relaxed">Cache offers general parenting guidance, not medical, mental-health, or emergency care. If someone may be in immediate danger, Cache will pause normal coaching and direct you to urgent help.</p>
               </details>
             </> : <>
               <p className="app-eyebrow">A calm place to think it through</p>
               <h1 className="mt-2 font-serif text-3xl">How can Cache help today?</h1>
-              <p className="mt-2 flex gap-2 text-sm text-ink/65"><ShieldCheck className="size-4 shrink-0 text-sage" />Cache offers general parenting guidance, not medical, mental-health, or emergency care.</p>
+              <p className="mt-2 flex gap-2 text-sm text-ink/65"><ShieldCheck className="size-4 shrink-0 text-sage" />Cache offers general parenting guidance, not medical, mental-health, or emergency care. Immediate safety concerns receive urgent-help guidance.</p>
             </>}
             {profile && <button type="button" onClick={() => setContextOpen(true)} className="mt-4 flex w-full items-center justify-between rounded-xl border border-ink/10 bg-cream px-3 py-2.5 text-left lg:hidden">
               <span><span className="block text-sm font-semibold text-ink">{profile.nickname} · {ageLabel(profile)}</span><span className="block text-xs text-ink/60">View saved context</span></span>
@@ -390,7 +545,7 @@ export default function CacheApp() {
             <div ref={messagesEndRef} />
           </div>
           {hasUnreadMessages && <button type="button" onClick={scrollToLatestMessage} className="mx-auto mb-3 w-fit rounded-full bg-sage px-3 py-1.5 text-xs font-semibold text-white shadow-sm">Jump to latest</button>}
-          {notice && <div className="mb-3 flex items-center justify-between gap-3 text-sm text-red-700" role="alert"><span>{notice}</span>{failedChatRequest && <button type="button" onClick={() => void sendChatMessage(failedChatRequest.content, failedChatRequest.clientRequestId, false)} className="font-semibold underline underline-offset-2">Try again</button>}</div>}
+          {notice && <div className="mb-3 flex items-center justify-between gap-3 text-sm text-red-700" role="alert"><span className="whitespace-pre-line">{notice}</span>{failedChatRequest && <button type="button" onClick={() => void sendChatMessage(failedChatRequest.content, failedChatRequest.clientRequestId, false)} className="shrink-0 font-semibold underline underline-offset-2">Try again</button>}</div>}
           <form onSubmit={sendMessage} className="flex shrink-0 gap-3 border-t border-ink/10 bg-white pt-5">
             <label className="sr-only" htmlFor="chat-message">Message Cache</label>
             <textarea ref={messageInputRef} id="chat-message" value={draft} onChange={(event) => setDraft(event.target.value)} className="app-input min-h-12 max-h-32 flex-1" placeholder="What is on your mind?" maxLength={4000} required />
@@ -399,13 +554,14 @@ export default function CacheApp() {
         </section>
       </div>
       {contextOpen && profile && <div className="fixed inset-0 z-30 lg:hidden">
-        <button type="button" onClick={() => setContextOpen(false)} className="absolute inset-0 bg-ink/35" aria-label="Close saved context" />
+        <button type="button" onClick={closeContext} className="absolute inset-0 bg-ink/35" aria-label="Close saved context" />
         <section ref={contextDrawerRef} className="absolute inset-x-0 bottom-0 max-h-[85dvh] overflow-y-auto rounded-t-[28px] bg-cream p-6 pb-8 shadow-[0_-12px_32px_-12px_rgba(43,38,34,0.28)]" role="dialog" aria-modal="true" aria-label={`${profile.nickname}'s saved context`}>
-          <button type="button" onClick={() => setContextOpen(false)} className="absolute right-5 top-5 rounded-lg p-2 text-ink/60 hover:bg-ink/5 hover:text-ink" aria-label="Close saved context"><X className="size-5" /></button>
-          <div className="pr-10"><ContextPanel profile={profile} onEdit={() => { setContextOpen(false); setEditing(true); }} /></div>
+          <button type="button" onClick={closeContext} className="absolute right-5 top-5 rounded-lg p-2 text-ink/60 hover:bg-ink/5 hover:text-ink" aria-label="Close saved context"><X className="size-5" /></button>
+          <div className="pr-10"><ContextPanel profile={profile} onEdit={() => { closeContext(); setEditing(true); }} /></div>
         </section>
       </div>}
       {editing && profile && <div className="fixed inset-0 z-20 overflow-y-auto bg-ink/35 p-4"><section className="app-card mx-auto my-8 max-w-2xl"><h2 className="mb-6 font-serif text-3xl">Update {profile.nickname}'s context</h2><ProfileForm initialProfile={profile} onSave={(saved) => { setProfile(saved); setEditing(false); }} onCancel={() => setEditing(false)} /></section></div>}
+      {accountOpen && <div className="fixed inset-0 z-40 overflow-y-auto bg-ink/35 p-4" role="presentation"><section ref={accountDialogRef} className="app-card mx-auto my-8 max-w-xl" role="dialog" aria-modal="true" aria-labelledby="account-dialog-title"><div className="flex items-start justify-between gap-4"><div><p className="app-eyebrow">Account settings</p><h2 id="account-dialog-title" className="mt-2 font-serif text-3xl">Your Cache data</h2></div><button ref={accountCloseButtonRef} type="button" onClick={closeAccount} className="rounded-lg p-2 text-ink/60 hover:bg-ink/5 hover:text-ink" aria-label="Close account settings"><X className="size-5" /></button></div><div className="mt-6"><AccountPanel exporting={exporting} deleting={deleting} deleteConfirmation={deleteConfirmation} onExport={() => void downloadData()} onDeleteConfirmationChange={setDeleteConfirmation} onDelete={() => void deleteAccount()} /></div></section></div>}
     </main>
   );
 }

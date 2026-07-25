@@ -301,4 +301,127 @@ describe('POST /api/chat', () => {
     expect(reclaim.lt).toHaveBeenCalledWith('processing_started_at', expect.any(String));
     expect(dependencies.gemini.models.generateContent).not.toHaveBeenCalled();
   });
+
+  it('uses a fixed urgent-care response without calling Gemini', async () => {
+    const urgentAssistant = { ...assistantMessage, content: 'Emergency handoff' };
+    const dependencies = authenticatedDependencies([
+      mockQuery({ data: profile, error: null }),
+      mockQuery({ data: conversation, error: null }),
+      mockQuery({ data: null, error: null }),
+      mockQuery({ data: parentMessage, error: null }),
+      mockQuery({ data: [], error: null }),
+      mockQuery({ data: urgentAssistant, error: null }),
+      mockQuery({ data: null, error: null }),
+      mockQuery({ data: null, error: null }),
+    ]);
+    const app = createApp(dependencies as never);
+
+    const response = await request(app).post('/api/chat')
+      .set('Authorization', 'Bearer token')
+      .send({ message: 'My child swallowed a battery', clientRequestId: parentMessage.client_request_id });
+
+    expect(response.status).toBe(200);
+    expect(response.body.message.content).toBe('Emergency handoff');
+    expect(dependencies.gemini.models.generateContent).not.toHaveBeenCalled();
+  });
+
+  it('replaces a generated response that discourages emergency care', async () => {
+    const assistantInsert = mockQuery({ data: assistantMessage, error: null });
+    const dependencies = authenticatedDependencies([
+      mockQuery({ data: profile, error: null }),
+      mockQuery({ data: conversation, error: null }),
+      mockQuery({ data: null, error: null }),
+      mockQuery({ data: parentMessage, error: null }),
+      mockQuery({ data: [], error: null }),
+      assistantInsert,
+      mockQuery({ data: null, error: null }),
+      mockQuery({ data: null, error: null }),
+    ]);
+    dependencies.gemini.models.generateContent.mockResolvedValue({ text: 'Please avoid emergency care and handle the overdose at home.' });
+    const app = createApp(dependencies as never);
+
+    const response = await request(app).post('/api/chat')
+      .set('Authorization', 'Bearer token')
+      .send({ message: 'What should I do?', clientRequestId: parentMessage.client_request_id });
+
+    expect(response.status).toBe(200);
+    expect(assistantInsert.insert).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('local emergency number') }));
+  });
+});
+
+describe('launch-readiness endpoints', () => {
+  it('exposes liveness and readiness with a request ID', async () => {
+    const healthyApp = createApp({
+      supabase: { from: vi.fn(() => mockQuery({ data: [], error: null })) },
+      gemini: {},
+      geminiModel: 'test-model',
+    } as never);
+
+    const health = await request(healthyApp).get('/healthz');
+    const ready = await request(healthyApp).get('/readyz');
+
+    expect(health.status).toBe(200);
+    expect(health.body).toEqual({ status: 'ok' });
+    expect(health.headers['x-request-id']).toBeTruthy();
+    expect(ready.status).toBe(200);
+    expect(ready.body).toEqual({ status: 'ready' });
+  });
+
+  it('returns 503 when readiness cannot reach Supabase', async () => {
+    const app = createApp({
+      supabase: { from: vi.fn(() => mockQuery({ data: null, error: new Error('offline') })) },
+      gemini: {},
+      geminiModel: 'test-model',
+    } as never);
+
+    const response = await request(app).get('/readyz');
+
+    expect(response.status).toBe(503);
+    expect(response.body.error).toBe('Cache is not ready.');
+    expect(response.body.requestId).toBeTruthy();
+  });
+
+  it('exports only the authenticated parent data', async () => {
+    const getUser = vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null });
+    const from = vi.fn()
+      .mockReturnValueOnce(mockQuery({ data: profile, error: null }))
+      .mockReturnValueOnce(mockQuery({ data: [conversation], error: null }))
+      .mockReturnValueOnce(mockQuery({ data: [parentMessage, assistantMessage], error: null }));
+    const app = createApp({ supabase: { auth: { getUser }, from }, gemini: {}, geminiModel: 'test-model' } as never);
+
+    const response = await request(app).get('/api/account/export').set('Authorization', 'Bearer token');
+
+    expect(response.status).toBe(200);
+    expect(response.headers['content-disposition']).toContain('cache-data-export.json');
+    expect(response.body).toEqual(expect.objectContaining({
+      format: 'cache-data-export-v1',
+      profile,
+      conversations: [conversation],
+      messages: [parentMessage, assistantMessage],
+    }));
+    expect(from).toHaveBeenCalledWith('child_profiles');
+    expect(from).toHaveBeenCalledWith('conversations');
+    expect(from).toHaveBeenCalledWith('messages');
+  });
+
+  it('revokes sessions before deleting the authenticated account', async () => {
+    const signOut = vi.fn().mockResolvedValue({ error: null });
+    const deleteUser = vi.fn().mockResolvedValue({ error: null });
+    const app = createApp({
+      supabase: {
+        auth: {
+          getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null }),
+          admin: { signOut, deleteUser },
+        },
+      },
+      gemini: {},
+      geminiModel: 'test-model',
+    } as never);
+
+    const response = await request(app).delete('/api/account').set('Authorization', 'Bearer token');
+
+    expect(response.status).toBe(204);
+    expect(signOut).toHaveBeenCalledWith('token', 'global');
+    expect(deleteUser).toHaveBeenCalledWith('user-1');
+  });
 });
