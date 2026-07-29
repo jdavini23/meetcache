@@ -560,8 +560,9 @@ export default function CacheApp() {
   const submitDraft = () => {
     const content = draft.trim();
     if (!content || !session || sendLock.current) return;
+    setDraft('');
     void sendChatMessage(content, crypto.randomUUID(), true).then((sent) => {
-      if (sent) setDraft((current) => current === content ? '' : current);
+      if (!sent) setDraft((current) => current.trim() ? current : content);
     });
   };
 

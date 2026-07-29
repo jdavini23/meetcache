@@ -197,6 +197,7 @@ describe('CacheApp', () => {
     fireEvent.change(input, { target: { value: 'What should I try?' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
+    expect(input).toHaveValue('');
     expect(await screen.findByText('Try one calm step.')).toBeInTheDocument();
     expect(input).toHaveValue('');
     expect(fetch).toHaveBeenCalledWith('/api/chat', expect.objectContaining({ method: 'POST' }));
