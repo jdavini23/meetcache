@@ -68,7 +68,7 @@ describe('CacheApp', () => {
     expect(await screen.findByText('Check your email for a secure sign-in link.')).toBeInTheDocument();
   });
 
-  it('keeps invalid onboarding data in the form with a clear validation error', async () => {
+  it('keeps invalid onboarding data in the form with an inline validation summary', async () => {
     getSession.mockResolvedValue({ data: { session: { access_token: 'token', user: { id: 'user-1' } } } });
     const profileQuery = { select: vi.fn(() => ({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) })) };
     from.mockReturnValue(profileQuery);
@@ -78,7 +78,51 @@ describe('CacheApp', () => {
     fireEvent.change(nickname, { target: { value: 'Milo' } });
     fireEvent.submit(nickname.closest('form')!);
 
-    expect(await screen.findByText(/supports children ages 1 through 6/i)).toBeInTheDocument();
+    expect(await screen.findByText('A few details need your attention.')).toBeInTheDocument();
+    expect(screen.getByText('Choose a birth month and year.')).toBeInTheDocument();
+    expect(nickname).toHaveValue('Milo');
+    expect(screen.getByLabelText('Birth month')).toHaveFocus();
+  });
+
+  it('keeps optional context hidden until a parent asks to add it', async () => {
+    const user = userEvent.setup();
+    getSession.mockResolvedValue({ data: { session: { access_token: 'token', user: { id: 'user-1' } } } });
+    const profileQuery = { select: vi.fn(() => ({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) })) };
+    from.mockReturnValue(profileQuery);
+    render(<CacheApp />);
+
+    const optionalDetails = await screen.findByRole('button', { name: /optional details/i });
+    expect(optionalDetails).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByLabelText(/pronouns/i)).not.toBeInTheDocument();
+
+    await user.click(optionalDetails);
+    expect(optionalDetails).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByLabelText(/pronouns/i)).toBeInTheDocument();
+    expect(screen.getByText('0 / 2000')).toBeInTheDocument();
+  });
+
+  it('opens existing optional context in the accessible editor and returns focus after closing', async () => {
+    const user = userEvent.setup();
+    const detailedProfile = { ...savedProfile, pronouns: 'they/them', parent_notes: 'A calm routine helps.' };
+    getSession.mockResolvedValue({ data: { session: { access_token: 'token', user: { id: 'user-1' } } } });
+    from.mockImplementation((table: string) => {
+      if (table === 'child_profiles') return queryResult(detailedProfile);
+      if (table === 'conversations') return queryResult({ id: 'conversation-1', child_profile_id: 'profile-1', user_id: 'user-1' });
+      return queryResult([]);
+    });
+    render(<CacheApp />);
+
+    const editButton = await screen.findByRole('button', { name: /edit saved context/i });
+    await user.click(editButton);
+    expect(screen.getByRole('dialog', { name: /update milo’s context/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /optional details/i })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByLabelText(/pronouns/i)).toHaveValue('they/them');
+
+    const closeButton = screen.getByRole('button', { name: 'Close context editor' });
+    expect(closeButton).toHaveFocus();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: /update milo’s context/i })).not.toBeInTheDocument();
+    expect(editButton).toHaveFocus();
   });
 
   it('traps focus in account settings and resets deletion confirmation when closed', async () => {
@@ -114,6 +158,48 @@ describe('CacheApp', () => {
 
     await user.click(accountButton);
     expect(screen.getByLabelText('Type DELETE to confirm')).toHaveValue('');
+  });
+
+  it('populates the focused composer from a starter prompt and preserves a Shift+Enter newline', async () => {
+    const user = userEvent.setup();
+    getSession.mockResolvedValue({ data: { session: { access_token: 'token', user: { id: 'user-1' } } } });
+    from.mockImplementation((table: string) => {
+      if (table === 'child_profiles') return queryResult(savedProfile);
+      if (table === 'conversations') return queryResult({ id: 'conversation-1', child_profile_id: 'profile-1', user_id: 'user-1' });
+      return queryResult([]);
+    });
+    render(<CacheApp />);
+
+    await user.click(await screen.findByRole('button', { name: 'Help me think through a tough moment.' }));
+    const input = screen.getByLabelText('Message Cache');
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue('Help me think through a tough moment.');
+
+    await user.keyboard('{Shift>}{Enter}{/Shift}One more detail');
+    expect(input).toHaveValue('Help me think through a tough moment.\nOne more detail');
+  });
+
+  it('sends a composer draft with Enter and clears it after a successful response', async () => {
+    vi.stubGlobal('crypto', { randomUUID: vi.fn(() => 'f8b67515-5e62-4a65-b7c7-69b7d7c1b471') });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      parentMessage: { id: 'parent-1', conversation_id: 'conversation-1', user_id: 'user-1', role: 'parent', content: 'What should I try?', created_at: '2026-01-01T00:00:00.000Z' },
+      message: { id: 'assistant-2', conversation_id: 'conversation-1', user_id: 'user-1', role: 'assistant', content: 'Try one calm step.', created_at: '2026-01-01T00:00:01.000Z' },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    getSession.mockResolvedValue({ data: { session: { access_token: 'token', user: { id: 'user-1' } } } });
+    from.mockImplementation((table: string) => {
+      if (table === 'child_profiles') return queryResult(savedProfile);
+      if (table === 'conversations') return queryResult({ id: 'conversation-1', child_profile_id: 'profile-1', user_id: 'user-1' });
+      return queryResult([]);
+    });
+    render(<CacheApp />);
+
+    const input = await screen.findByLabelText('Message Cache');
+    fireEvent.change(input, { target: { value: 'What should I try?' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(await screen.findByText('Try one calm step.')).toBeInTheDocument();
+    expect(input).toHaveValue('');
+    expect(fetch).toHaveBeenCalledWith('/api/chat', expect.objectContaining({ method: 'POST' }));
   });
 
   it('aborts hanging chat attempts and retries with the original idempotency ID', async () => {
