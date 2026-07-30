@@ -21,12 +21,11 @@ export default function FinalCTA() {
           <div className="absolute -top-24 -right-24 w-64 h-64 bg-sage/10 rounded-full blur-3xl pointer-events-none" />
 
           <div className="relative z-10 max-w-2xl mx-auto flex flex-col items-center">
-            {/* Heading */}
             <h2 
               id="final-cta-heading"
               className="font-serif text-3xl sm:text-4xl md:text-5xl font-medium tracking-tight mb-4 leading-tight"
             >
-              Help shape Cache<span className="text-terracotta">.</span>
+              Be among the first parents to try Cache<span className="text-terracotta">.</span>
             </h2>
             
             {/* Paragraph */}
@@ -34,7 +33,7 @@ export default function FinalCTA() {
               id="final-cta-paragraph"
               className="font-sans text-sm sm:text-base text-cream/80 max-w-lg mb-10 leading-relaxed"
             >
-              We're building the first version for parents of children ages 1–6. Join early access to try Cache, share feedback, and help us decide what to build first.
+              Join the waitlist now. We'll invite parents as spots open and ask what would make Cache most useful for everyday family life.
             </p>
 
             {/* Email form container */}
@@ -42,7 +41,12 @@ export default function FinalCTA() {
               id="final-cta-form-container"
               className="w-full max-w-md"
             >
-              <WaitlistForm idPrefix="cta" isDarkTheme={true} />
+              <WaitlistForm
+                idPrefix="cta"
+                isDarkTheme={true}
+                buttonLabel="Get early access"
+                supportingCopy="Email only. We'll use it for early-access invitations and occasional research messages."
+              />
             </div>
           </div>
         </motion.div>

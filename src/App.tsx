@@ -1,9 +1,9 @@
 import Navbar from './components/Navbar';
 import Hero from './components/Hero';
-import Problem from './components/Problem';
 import ProductExample from './components/ProductExample';
+import GeneralAIComparison from './components/GeneralAIComparison';
+import TrustSafety from './components/TrustSafety';
 import HowItWorks from './components/HowItWorks';
-import Difference from './components/Difference';
 import FinalCTA from './components/FinalCTA';
 import Footer from './components/Footer';
 import CacheApp from './components/CacheApp';
@@ -34,22 +34,11 @@ export default function App() {
 
       {/* Main Content Sections */}
       <main className="flex-1">
-        {/* 2. Hero Section with Waitlist Registration */}
         <Hero />
-
-        {/* 3. Problem Section */}
-        <Problem />
-
-        {/* 3.5. Illustrative Product Example */}
         <ProductExample />
-
-        {/* 4. How It Works Section */}
+        <GeneralAIComparison />
+        <TrustSafety />
         <HowItWorks />
-
-        {/* 5. Difference Section */}
-        <Difference />
-
-        {/* 6. Final CTA Card Section */}
         <FinalCTA />
       </main>
 

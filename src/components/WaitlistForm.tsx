@@ -6,9 +6,18 @@ import { supabase } from '../lib/supabase';
 interface WaitlistFormProps {
   idPrefix: string;
   isDarkTheme?: boolean;
+  heading?: string | null;
+  buttonLabel?: string;
+  supportingCopy?: string;
 }
 
-export default function WaitlistForm({ idPrefix, isDarkTheme = false }: WaitlistFormProps) {
+export default function WaitlistForm({
+  idPrefix,
+  isDarkTheme = false,
+  heading,
+  buttonLabel = 'Get early access',
+  supportingCopy = "Share only your email. We'll use it for early-access and occasional research messages."
+}: WaitlistFormProps) {
   const [email, setEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedEmail, setSubmittedEmail] = useState('');
@@ -108,6 +117,9 @@ export default function WaitlistForm({ idPrefix, isDarkTheme = false }: Waitlist
     { value: 'routines_transitions', label: 'Routines and transitions' },
     { value: 'something_else', label: 'Something else' }
   ];
+  const resolvedHeading = heading === undefined
+    ? (isDarkTheme ? null : 'Get early access')
+    : heading;
 
   return (
     <div className="w-full max-w-md mx-auto" id={`${idPrefix}-form-container`}>
@@ -119,11 +131,14 @@ export default function WaitlistForm({ idPrefix, isDarkTheme = false }: Waitlist
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
             transition={{ duration: 0.3 }}
-            className={`w-full ${isDarkTheme ? '' : 'bg-white rounded-[32px] p-8 border border-ink/10 shadow-[0_10px_30px_-15px_rgba(43,38,34,0.1)]'}`}
+            className={`w-full ${isDarkTheme ? '' : 'bg-white rounded-[24px] sm:rounded-[32px] p-5 sm:p-8 border border-ink/10 shadow-[0_10px_30px_-15px_rgba(43,38,34,0.1)]'}`}
           >
-            {!isDarkTheme && (
-              <label className="block text-[10px] uppercase tracking-widest font-bold text-ink/50 mb-4 text-left">
-                Join early access
+            {resolvedHeading && (
+              <label
+                htmlFor={`${idPrefix}-email-input`}
+                className={`block text-[10px] uppercase tracking-widest font-bold mb-2 sm:mb-4 text-left ${isDarkTheme ? 'text-cream/60' : 'text-ink/50'}`}
+              >
+                {resolvedHeading}
               </label>
             )}
             <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-2.5">
@@ -156,7 +171,7 @@ export default function WaitlistForm({ idPrefix, isDarkTheme = false }: Waitlist
                   </>
                 ) : (
                   <>
-                    <span>Join early access</span>
+                    <span>{buttonLabel}</span>
                     <ArrowRight className="h-4 w-4" />
                   </>
                 )}
@@ -168,16 +183,17 @@ export default function WaitlistForm({ idPrefix, isDarkTheme = false }: Waitlist
                 initial={{ opacity: 0, y: -5 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="flex items-center gap-2 mt-3 text-sm text-red-600 font-medium"
+                role="alert"
               >
                 <AlertCircle className="h-4 w-4 shrink-0" />
                 <span>{errorMessage}</span>
               </motion.div>
             )}
 
-            <p className={`mt-4 text-xs tracking-wide text-center sm:text-left
+            <p className={`mt-3 sm:mt-4 text-[11px] sm:text-xs leading-relaxed tracking-wide text-center sm:text-left
               ${isDarkTheme ? 'text-cream/60' : 'text-ink/60'}`}
             >
-              Share only your email. We'll use it for early-access and occasional research messages.
+              {supportingCopy}
             </p>
           </motion.div>
         ) : (status === 'success' || status === 'duplicate') && useCaseSurveyStatus !== 'done' ? (
