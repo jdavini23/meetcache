@@ -4,7 +4,7 @@ import { AlertCircle, ArrowRight, ChevronDown, ChevronUp, Info, Loader2, LogOut,
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { formatChildAge, isChildAgeSupported } from '../lib/childAge';
-import type { ChildProfile, Conversation, Message } from '../lib/types';
+import type { ChildProfile, Conversation, MemorySuggestion, Message, UsedMemory } from '../lib/types';
 import ChatMarkdown from './ChatMarkdown';
 
 type AppState = 'loading' | 'signed-out' | 'onboarding' | 'ready' | 'error';
@@ -323,12 +323,48 @@ function AccountPanel({ exporting, deleting, deleteConfirmation, onExport, onDel
   </>;
 }
 
+function MemorySuggestionCard({ suggestions, onResolve }: { suggestions: MemorySuggestion[]; onResolve: (suggestion: MemorySuggestion, action: 'accept' | 'reject', content?: string) => void }) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  if (!suggestions.length) return null;
+
+  return <section className="memory-suggestion-card" aria-label="Memory suggestions">
+    <p className="text-sm font-semibold text-ink">Want me to remember anything from this?</p>
+    <p className="mt-1 text-xs leading-relaxed text-ink/60">You choose what Cache saves. Nothing is added unless you save it.</p>
+    <div className="mt-3 space-y-2">
+      {suggestions.map((suggestion) => <div key={suggestion.id} className="rounded-xl border border-sage/20 bg-white/70 p-3">
+        {editingId === suggestion.id ? <>
+          <label className="sr-only" htmlFor={`memory-suggestion-${suggestion.id}`}>Edit memory suggestion</label>
+          <textarea id={`memory-suggestion-${suggestion.id}`} value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={280} className="app-input min-h-20 resize-y" />
+          <div className="mt-2 flex gap-2"><button type="button" onClick={() => { onResolve(suggestion, 'accept', draft); setEditingId(null); }} disabled={!draft.trim()} className="memory-suggestion-save">Save memory</button><button type="button" onClick={() => setEditingId(null)} className="memory-suggestion-secondary">Cancel</button></div>
+        </> : <>
+          <p className="text-sm leading-relaxed text-ink">{suggestion.suggested_content}</p>
+          <div className="mt-2 flex flex-wrap gap-2"><button type="button" onClick={() => onResolve(suggestion, 'accept')} className="memory-suggestion-save">Save</button><button type="button" onClick={() => { setDraft(suggestion.suggested_content); setEditingId(suggestion.id); }} className="memory-suggestion-secondary">Edit</button><button type="button" onClick={() => onResolve(suggestion, 'reject')} className="memory-suggestion-secondary">Dismiss</button></div>
+        </>}
+      </div>)}
+    </div>
+  </section>;
+}
+
+function MemoryUseDisclosure({ memories }: { memories: UsedMemory[] }) {
+  if (!memories.length) return null;
+  return <details className="group mt-2 max-w-xl text-xs text-ink/60">
+    <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-lg px-2 py-1 font-medium transition hover:bg-sage/10 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta">
+      <span>Using saved context</span><ChevronDown className="size-3.5 transition group-open:rotate-180" aria-hidden="true" />
+    </summary>
+    <ul className="mt-1.5 space-y-1.5 rounded-xl border border-sage/15 bg-sage/5 px-3 py-2.5" aria-label="Saved context used for this reply">
+      {memories.map((memory, index) => <li key={`${memory.memory_id ?? 'deleted'}-${index}`} className="leading-relaxed">{memory.content}</li>)}
+    </ul>
+  </details>;
+}
+
 export default function CacheApp() {
   const [appState, setAppState] = useState<AppState>('loading');
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<ChildProfile | null>(null);
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [memorySuggestions, setMemorySuggestions] = useState<Record<string, MemorySuggestion[]>>({});
   const [email, setEmail] = useState('');
   const [notice, setNotice] = useState('');
   const [draft, setDraft] = useState('');
@@ -361,6 +397,24 @@ export default function CacheApp() {
   }, []);
   const closeEditing = useCallback(() => setEditing(false), []);
 
+  const setPendingSuggestions = (suggestions: MemorySuggestion[]) => {
+    setMemorySuggestions(() => suggestions.reduce<Record<string, MemorySuggestion[]>>((grouped, suggestion) => {
+      (grouped[suggestion.assistant_message_id] ??= []).push(suggestion);
+      return grouped;
+    }, {}));
+  };
+
+  const loadMemorySuggestions = async (conversationId: string, accessToken: string) => {
+    try {
+      const response = await fetch(`/api/memory-suggestions?conversationId=${encodeURIComponent(conversationId)}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (!response.ok) return;
+      const body = await response.json() as { suggestions?: MemorySuggestion[] };
+      setPendingSuggestions(body.suggestions ?? []);
+    } catch {
+      // Suggestions are intentionally non-blocking.
+    }
+  };
+
   const loadAccount = async (activeSession: Session) => {
     setAppState('loading');
     const { data: profileData, error: profileError } = await supabase.from('child_profiles').select().maybeSingle();
@@ -380,8 +434,32 @@ export default function CacheApp() {
     const { data: messageData, error: messageError } = await supabase.from('messages').select().eq('conversation_id', activeConversation.id).order('created_at');
     if (messageError) { setNotice('We could not load earlier messages.'); }
     const savedMessages = (messageData ?? []) as Message[];
-    setMessages(savedMessages);
-    const incompleteMessage = [...savedMessages].reverse().find((message) => message.role === 'parent'
+    const messageIds = new Set(savedMessages.map((savedMessage) => savedMessage.id));
+    const { data: memoryUseData } = await supabase.from('memory_message_uses')
+      .select('assistant_message_id, child_memory_id, memory_type_snapshot, content_snapshot')
+      .eq('user_id', activeSession.user.id)
+      .order('created_at');
+    const memoryUsesByMessage = ((memoryUseData ?? []) as Array<{
+      assistant_message_id: string;
+      child_memory_id: string | null;
+      memory_type_snapshot: UsedMemory['memory_type'];
+      content_snapshot: string;
+    }>).reduce<Record<string, UsedMemory[]>>((grouped, use) => {
+      if (!messageIds.has(use.assistant_message_id)) return grouped;
+      (grouped[use.assistant_message_id] ??= []).push({
+        memory_id: use.child_memory_id,
+        memory_type: use.memory_type_snapshot,
+        content: use.content_snapshot,
+      });
+      return grouped;
+    }, {});
+    const messagesWithMemoryUses = savedMessages.map((savedMessage) => ({
+      ...savedMessage,
+      used_memories: memoryUsesByMessage[savedMessage.id] ?? [],
+    }));
+    setMessages(messagesWithMemoryUses);
+    void loadMemorySuggestions(activeConversation.id, activeSession.access_token);
+    const incompleteMessage = [...messagesWithMemoryUses].reverse().find((message) => message.role === 'parent'
       && message.client_request_id
       && (message.response_status === 'pending' || message.response_status === 'failed'));
     if (incompleteMessage?.client_request_id) {
@@ -398,7 +476,7 @@ export default function CacheApp() {
     });
     const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
-      if (nextSession) void loadAccount(nextSession); else { setProfile(null); setMessages([]); setAppState('signed-out'); }
+      if (nextSession) void loadAccount(nextSession); else { setProfile(null); setMessages([]); setMemorySuggestions({}); setAppState('signed-out'); }
     });
     return () => listener.subscription.unsubscribe();
   }, []);
@@ -483,6 +561,42 @@ export default function CacheApp() {
     throw new ChatRequestError('Cache is still preparing this response. Please try again; your message will not be sent twice.', lastRequestId);
   };
 
+  const requestMemorySuggestions = async (assistantMessageId: string) => {
+    if (!session) return;
+    try {
+      const response = await fetch('/api/memory-suggestions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ assistantMessageId }),
+      });
+      if (!response.ok) return;
+      const body = await response.json() as { suggestions?: MemorySuggestion[] };
+      const suggestions = body.suggestions ?? [];
+      if (!suggestions.length) return;
+      setMemorySuggestions((current) => ({ ...current, [assistantMessageId]: suggestions }));
+    } catch {
+      // Suggestions are intentionally non-blocking.
+    }
+  };
+
+  const resolveMemorySuggestion = async (suggestion: MemorySuggestion, action: 'accept' | 'reject', content?: string) => {
+    if (!session) return;
+    try {
+      const response = await fetch(`/api/memory-suggestions/${suggestion.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ action, ...(content !== undefined ? { content } : {}) }),
+      });
+      if (!response.ok) return;
+      setMemorySuggestions((current) => {
+        const remaining = (current[suggestion.assistant_message_id] ?? []).filter((item) => item.id !== suggestion.id);
+        return { ...current, [suggestion.assistant_message_id]: remaining };
+      });
+    } catch {
+      // Preserve the suggestion so the parent can try again later.
+    }
+  };
+
   const sendChatMessage = async (content: string, clientRequestId: string, showOptimisticMessage: boolean) => {
     if (!session || sendLock.current) return false;
     const pendingMessageId = `pending-${clientRequestId}`;
@@ -505,6 +619,7 @@ export default function CacheApp() {
         if (pendingMessageIndex === -1) return [...current, body.parentMessage!, body.message!];
         return [...current.slice(0, pendingMessageIndex), body.parentMessage!, body.message!, ...current.slice(pendingMessageIndex + 1)];
       });
+      if (body.message?.memory_suggestion_eligible) void requestMemorySuggestions(body.message.id);
       return true;
     } catch (error) {
       setFailedChatRequest({ content, clientRequestId });
@@ -638,7 +753,7 @@ export default function CacheApp() {
                 </div>
               </div>
             </div>}
-            {messages.map((message) => <div key={message.id}><ChatMessage message={message} /></div>)}
+            {messages.map((message) => <div key={message.id}><ChatMessage message={message} />{message.role === 'assistant' && <><MemoryUseDisclosure memories={message.used_memories ?? []} /><MemorySuggestionCard suggestions={memorySuggestions[message.id] ?? []} onResolve={(suggestion, action, content) => void resolveMemorySuggestion(suggestion, action, content)} /></>}</div>)}
             {sending && <div className="flex w-fit items-center gap-2.5 rounded-2xl rounded-bl-md border border-sage/15 bg-sage/10 px-4 py-3 text-sm text-ink" role="status"><span className="grid size-7 place-items-center rounded-full bg-white/70 text-sage" aria-hidden="true"><Sparkles className="size-3.5" /></span><span>Cache is thinking<span className="chat-thinking-dots" aria-hidden="true"><i /><i /><i /></span></span><span className="sr-only">Cache is preparing a response</span></div>}
             <div ref={messagesEndRef} />
           </div>

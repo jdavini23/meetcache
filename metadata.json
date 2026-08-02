@@ -1,6 +1,6 @@
 {
-  "name": "Cache Landing Page",
-  "description": "An early-access landing page for Cache, an AI parenting coach that remembers your child's context.",
+  "name": "Cache",
+  "description": "A passwordless AI parenting coach that remembers parent-provided child context across conversations.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

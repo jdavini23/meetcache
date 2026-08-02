@@ -2,12 +2,17 @@
 
 ## Purpose
 
-Cache is an early-access landing page for an AI parenting coach that retains
-useful context about a child. The design should make that promise feel calm,
-considerate, and practical—not clinical, overly technical, or overly cute.
+Cache is a passwordless AI parenting coach that retains useful, parent-provided
+context about a child. Its public site introduces the product and collects
+early-access interest; the signed-in product lets parents save context and
+return to an ongoing conversation. The design should make that promise feel
+calm, considerate, and practical—not clinical, overly technical, or overly
+cute.
 
-The page is built to earn enough trust for a parent to share an email and,
-after signup, a short indication of what they need help with.
+The public page is built to earn enough trust for a parent to share an email
+and, after signup, a short indication of what they need help with. The product
+experience should carry forward the same reassurance while making account,
+privacy, and safety controls easy to find.
 
 ## Design principles
 
@@ -19,8 +24,9 @@ after signup, a short indication of what they need help with.
    restrained surfaces, few competing accents, and direct calls to action.
 4. **Human guidance, practical boundaries.** Copy should remain supportive and
    avoid implying medical or professional-care replacement.
-5. **One primary action.** “Join early access” is the persistent conversion
-   action across the navigation, hero, and final callout.
+5. **One primary action per surface.** The public site consistently offers
+   “Join early access”; the product surface prioritizes sending a message or
+   saving child context without competing calls to action.
 
 ## Visual foundation
 
@@ -90,9 +96,9 @@ explain the model, then reinforce the differentiator before the final request.
 
 ### Navigation
 
-The sticky navigation has a translucent, blurred cream background and a subtle
-bottom border. The Cache wordmark is Fraunces with a terracotta period. Its
-only navigation action scrolls smoothly to the hero email input and focuses it.
+The public sticky navigation has a translucent, blurred cream background and a
+subtle bottom border. The Cache wordmark is Fraunces with a terracotta period.
+Its primary action scrolls smoothly to the hero email input and focuses it.
 
 ### Hero and forms
 
@@ -106,6 +112,15 @@ The form has four visible outcomes: default, validation/submission error,
 existing or newly saved email with an optional use-case survey, and a thank-you
 state. Each outcome needs the same generous 32px rounding, clear copy, and
 visible disabled/loading treatment.
+
+### Product experience
+
+The `/app` experience begins with passwordless email sign-in, then provides a
+focused chat and a place to maintain child context. Keep the chat legible and
+calm: distinguish parent and Cache messages, preserve a clear sending state,
+and keep urgent-care guidance visually unambiguous. Account export, deletion,
+and privacy information must remain discoverable without interrupting normal
+conversation. Do not present Cache as medical or emergency care.
 
 ### Information cards
 
@@ -174,3 +189,5 @@ the existing component-per-section structure in `src/components/`.
 - Does motion support calmness and remain usable when reduced motion is set?
 - Is the final CTA visually distinct while still clearly part of the same
   design system?
+- In `/app`, are sign-in, saved context, chat states, privacy controls, and
+  urgent-care guidance understandable without relying on color alone?

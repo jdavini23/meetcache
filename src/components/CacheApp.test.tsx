@@ -179,12 +179,72 @@ describe('CacheApp', () => {
     expect(input).toHaveValue('Help me think through a tough moment.\nOne more detail');
   });
 
+  it('shows persisted memory suggestions below the related Cache reply and dismisses one explicitly', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn((url: string) => {
+      if (url.startsWith('/api/memory-suggestions?')) {
+        return Promise.resolve(new Response(JSON.stringify({ suggestions: [{
+          id: 'suggestion-1', assistant_message_id: 'assistant-1', suggested_type: 'trigger',
+          suggested_content: 'Transitions are harder after screen time.', decision: 'pending',
+        }] }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ result: { decision: 'rejected' } }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    getSession.mockResolvedValue({ data: { session: { access_token: 'token', user: { id: 'user-1' } } } });
+    from.mockImplementation((table: string) => {
+      if (table === 'child_profiles') return queryResult(savedProfile);
+      if (table === 'conversations') return queryResult({ id: 'conversation-1', child_profile_id: 'profile-1', user_id: 'user-1' });
+      return queryResult([{ id: 'assistant-1', conversation_id: 'conversation-1', user_id: 'user-1', role: 'assistant', content: 'Try a visual timer.', created_at: '2026-01-01T00:00:00.000Z' }]);
+    });
+    render(<CacheApp />);
+
+    expect(await screen.findByText('Want me to remember anything from this?')).toBeInTheDocument();
+    expect(screen.getByText('Transitions are harder after screen time.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(fetchMock).toHaveBeenCalledWith('/api/memory-suggestions/suggestion-1', expect.objectContaining({ method: 'PATCH' }));
+    expect(screen.queryByText('Transitions are harder after screen time.')).not.toBeInTheDocument();
+  });
+
+  it('shows an expandable disclosure beneath a reply that used saved context after reload', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ suggestions: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+    getSession.mockResolvedValue({ data: { session: { access_token: 'token', user: { id: 'user-1' } } } });
+    from.mockImplementation((table: string) => {
+      if (table === 'child_profiles') return queryResult(savedProfile);
+      if (table === 'conversations') return queryResult({ id: 'conversation-1', child_profile_id: 'profile-1', user_id: 'user-1' });
+      if (table === 'messages') return queryResult([{
+        id: 'assistant-1', conversation_id: 'conversation-1', user_id: 'user-1', role: 'assistant',
+        content: 'Try a visual timer.', created_at: '2026-01-01T00:00:00.000Z',
+      }]);
+      if (table === 'memory_message_uses') return queryResult([{
+        assistant_message_id: 'assistant-1', child_memory_id: 'memory-1', memory_type_snapshot: 'helps',
+        content_snapshot: 'A visual timer helps with transitions.',
+      }]);
+      return queryResult([]);
+    });
+    render(<CacheApp />);
+
+    const disclosure = await screen.findByText('Using saved context');
+    const details = disclosure.closest('details');
+    expect(details).not.toHaveAttribute('open');
+    await user.click(disclosure);
+    expect(details).toHaveAttribute('open');
+    expect(screen.getByText('A visual timer helps with transitions.')).toBeInTheDocument();
+  });
+
   it('sends a composer draft with Enter and clears it after a successful response', async () => {
     vi.stubGlobal('crypto', { randomUUID: vi.fn(() => 'f8b67515-5e62-4a65-b7c7-69b7d7c1b471') });
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      parentMessage: { id: 'parent-1', conversation_id: 'conversation-1', user_id: 'user-1', role: 'parent', content: 'What should I try?', created_at: '2026-01-01T00:00:00.000Z' },
-      message: { id: 'assistant-2', conversation_id: 'conversation-1', user_id: 'user-1', role: 'assistant', content: 'Try one calm step.', created_at: '2026-01-01T00:00:01.000Z' },
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.startsWith('/api/memory-suggestions')) return Promise.resolve(new Response(JSON.stringify({ suggestions: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      return Promise.resolve(new Response(JSON.stringify({
+        parentMessage: { id: 'parent-1', conversation_id: 'conversation-1', user_id: 'user-1', role: 'parent', content: 'What should I try?', created_at: '2026-01-01T00:00:00.000Z' },
+        message: { id: 'assistant-2', conversation_id: 'conversation-1', user_id: 'user-1', role: 'assistant', content: 'Try one calm step.', created_at: '2026-01-01T00:00:01.000Z' },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    }));
     getSession.mockResolvedValue({ data: { session: { access_token: 'token', user: { id: 'user-1' } } } });
     from.mockImplementation((table: string) => {
       if (table === 'child_profiles') return queryResult(savedProfile);
@@ -206,10 +266,13 @@ describe('CacheApp', () => {
   it('aborts hanging chat attempts and retries with the original idempotency ID', async () => {
     const pendingRequests: RequestInit[] = [];
     vi.stubGlobal('crypto', { randomUUID: vi.fn(() => 'f8b67515-5e62-4a65-b7c7-69b7d7c1b471') });
-    vi.stubGlobal('fetch', vi.fn((_url: string, options?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    vi.stubGlobal('fetch', vi.fn((url: string, options?: RequestInit) => {
+      if (url.startsWith('/api/memory-suggestions')) return Promise.resolve(new Response(JSON.stringify({ suggestions: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      return new Promise<Response>((_resolve, reject) => {
       pendingRequests.push(options ?? {});
       options?.signal?.addEventListener('abort', () => reject(new DOMException('Request aborted', 'AbortError')));
-    })));
+      });
+    }));
     getSession.mockResolvedValue({ data: { session: { access_token: 'token', user: { id: 'user-1' } } } });
     from.mockImplementation((table: string) => {
       if (table === 'child_profiles') return queryResult(savedProfile);

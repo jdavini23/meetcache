@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createApp,
   isContextSummaryRequest,
+  parseCoachingResponse,
+  parseMemorySuggestions,
   isSimpleGreeting,
   isStalePendingRequest,
   isUrgentSafetyConcern,
@@ -83,12 +85,18 @@ const assistantMessage = {
   created_at: '2026-07-22T12:00:01.000Z',
 };
 
+const approvedMemory = {
+  id: '2fe77944-ee05-4dd1-a589-92699b6e2278',
+  memory_type: 'helps' as const,
+  content: 'A visual timer helps with transitions.',
+};
+
 function authenticatedDependencies(
   queries: ReturnType<typeof mockQuery>[],
   rpcResult: QueryResult = { data: true, error: null },
 ) {
   const generateContent = vi.fn().mockResolvedValue({
-    text: assistantMessage.content,
+    text: JSON.stringify({ content: assistantMessage.content, usedMemoryIds: [] }),
   });
 
   return {
@@ -104,7 +112,9 @@ function authenticatedDependencies(
         if (!query) throw new Error('Unexpected database query');
         return query;
       }),
-      rpc: vi.fn().mockResolvedValue(rpcResult),
+      rpc: vi.fn((name: string) => Promise.resolve(name === 'persist_assistant_message_with_memory_uses'
+        ? { data: assistantMessage, error: null }
+        : rpcResult)),
     },
     gemini: { models: { generateContent } },
     geminiModel: 'test-model',
@@ -129,6 +139,34 @@ describe('chat safety helpers', () => {
       ...parentMessage,
       response_status: 'completed',
     } as never, 90, now)).toBe(false);
+  });
+
+  it('keeps only concise, safe, unique memory suggestions', () => {
+    expect(parseMemorySuggestions(JSON.stringify([
+      { type: 'trigger', content: 'Transitions are harder after screen time.' },
+      { type: 'trigger', content: 'Transitions are harder after screen time!' },
+      { type: 'routine', content: 'Milo has ADHD.' },
+      { type: 'helps', content: 'A visual timer can help with transitions.' },
+    ]))).toEqual([
+      { type: 'trigger', content: 'Transitions are harder after screen time.' },
+      { type: 'helps', content: 'A visual timer can help with transitions.' },
+    ]);
+  });
+
+  it('keeps only supplied, unique memory references from a structured coaching response', () => {
+    const memories = [
+      { id: 'memory-1', memory_type: 'helps' as const, content: 'A visual timer helps with transitions.' },
+      { id: 'memory-2', memory_type: 'routine' as const, content: 'Bedtime starts at seven.' },
+    ];
+
+    expect(parseCoachingResponse(JSON.stringify({
+      content: '**Try this first:** Set the timer.',
+      usedMemoryIds: ['memory-1', 'foreign-memory', 'memory-1'],
+    }), memories)).toEqual({
+      content: '**Try this first:** Set the timer.',
+      usedMemories: [{ memory_id: 'memory-1', memory_type: 'helps', content: 'A visual timer helps with transitions.' }],
+    });
+    expect(parseCoachingResponse('{not json}', memories)).toBeNull();
   });
 });
 
@@ -174,14 +212,14 @@ describe('POST /api/chat', () => {
 
   it('persists a parent message and Gemini response', async () => {
     const parentInsert = mockQuery({ data: parentMessage, error: null });
-    const assistantInsert = mockQuery({ data: assistantMessage, error: null });
+    const memoryQuery = mockQuery({ data: [], error: null });
     const dependencies = authenticatedDependencies([
       mockQuery({ data: profile, error: null }),
       mockQuery({ data: conversation, error: null }),
       mockQuery({ data: null, error: null }),
       parentInsert,
       mockQuery({ data: [], error: null }),
-      assistantInsert,
+      memoryQuery,
       mockQuery({ data: null, error: null }),
       mockQuery({ data: null, error: null }),
     ]);
@@ -195,7 +233,7 @@ describe('POST /api/chat', () => {
       });
 
     expect(response.status).toBe(200);
-    expect(response.body.message).toEqual(assistantMessage);
+    expect(response.body.message).toEqual({ ...assistantMessage, used_memories: [] });
     expect(dependencies.supabase.rpc).toHaveBeenCalledWith('consume_chat_rate_limit', {
       p_user_id: 'user-1',
       p_max_requests: 10,
@@ -209,14 +247,21 @@ describe('POST /api/chat', () => {
       content: parentMessage.content,
       response_status: 'pending',
     }));
-    expect(dependencies.gemini.models.generateContent).toHaveBeenCalledWith({
+    expect(dependencies.gemini.models.generateContent).toHaveBeenCalledWith(expect.objectContaining({
       model: 'test-model',
       contents: expect.stringContaining('Nickname: Milo'),
-    });
-    expect(assistantInsert.insert).toHaveBeenCalledWith(expect.objectContaining({
-      content: assistantMessage.content,
-      in_reply_to: parentMessage.id,
+      config: expect.objectContaining({ responseMimeType: 'application/json' }),
     }));
+    expect(memoryQuery.eq).toHaveBeenCalledWith('child_profile_id', profile.id);
+    expect(memoryQuery.limit).toHaveBeenCalledWith(12);
+    expect(dependencies.supabase.rpc).toHaveBeenCalledWith('persist_assistant_message_with_memory_uses', {
+      p_conversation_id: conversation.id,
+      p_user_id: 'user-1',
+      p_content: assistantMessage.content,
+      p_in_reply_to: parentMessage.id,
+      p_memory_suggestion_eligible: true,
+      p_used_memory_ids: [],
+    });
   });
 
   it('returns 429 before storing a new message when the durable quota is exhausted', async () => {
@@ -238,6 +283,69 @@ describe('POST /api/chat', () => {
     expect(response.headers['retry-after']).toBe('60');
     expect(dependencies.supabase.from).toHaveBeenCalledTimes(3);
     expect(dependencies.gemini.models.generateContent).not.toHaveBeenCalled();
+  });
+
+  it('reuses only validated memories for the current child and returns their audited snapshots', async () => {
+    const memoryQuery = mockQuery({ data: [approvedMemory], error: null });
+    const dependencies = authenticatedDependencies([
+      mockQuery({ data: profile, error: null }),
+      mockQuery({ data: conversation, error: null }),
+      mockQuery({ data: null, error: null }),
+      mockQuery({ data: parentMessage, error: null }),
+      mockQuery({ data: [], error: null }),
+      memoryQuery,
+      mockQuery({ data: null, error: null }),
+      mockQuery({ data: null, error: null }),
+    ]);
+    dependencies.gemini.models.generateContent.mockResolvedValue({ text: JSON.stringify({
+      content: assistantMessage.content,
+      usedMemoryIds: [approvedMemory.id, '65a8a006-b90f-42d9-85c7-a85a013732ef', approvedMemory.id],
+    }) });
+    const app = createApp(dependencies as never);
+
+    const response = await request(app).post('/api/chat')
+      .set('Authorization', 'Bearer token')
+      .send({ message: parentMessage.content, clientRequestId: parentMessage.client_request_id });
+
+    expect(response.status).toBe(200);
+    expect(memoryQuery.eq).toHaveBeenCalledWith('child_profile_id', profile.id);
+    expect(memoryQuery.eq).toHaveBeenCalledWith('user_id', 'user-1');
+    expect(memoryQuery.order).toHaveBeenCalledWith('created_at', { ascending: false });
+    expect(memoryQuery.limit).toHaveBeenCalledWith(12);
+    expect(dependencies.gemini.models.generateContent).toHaveBeenCalledWith(expect.objectContaining({
+      contents: expect.stringContaining(`[${approvedMemory.id}] ${approvedMemory.content}`),
+    }));
+    expect(dependencies.supabase.rpc).toHaveBeenCalledWith('persist_assistant_message_with_memory_uses', expect.objectContaining({
+      p_used_memory_ids: [approvedMemory.id],
+    }));
+    expect(response.body.message.used_memories).toEqual([{
+      memory_id: approvedMemory.id,
+      memory_type: approvedMemory.memory_type,
+      content: approvedMemory.content,
+    }]);
+  });
+
+  it('fails safely without saving an assistant reply when structured model output is invalid', async () => {
+    const failedStatusUpdate = mockQuery({ data: null, error: null });
+    const dependencies = authenticatedDependencies([
+      mockQuery({ data: profile, error: null }),
+      mockQuery({ data: conversation, error: null }),
+      mockQuery({ data: null, error: null }),
+      mockQuery({ data: parentMessage, error: null }),
+      mockQuery({ data: [], error: null }),
+      mockQuery({ data: [approvedMemory], error: null }),
+      failedStatusUpdate,
+    ]);
+    dependencies.gemini.models.generateContent.mockResolvedValue({ text: 'not-json' });
+    const app = createApp(dependencies as never);
+
+    const response = await request(app).post('/api/chat')
+      .set('Authorization', 'Bearer token')
+      .send({ message: parentMessage.content, clientRequestId: parentMessage.client_request_id });
+
+    expect(response.status).toBe(500);
+    expect(dependencies.supabase.rpc.mock.calls.some(([name]) => name === 'persist_assistant_message_with_memory_uses')).toBe(false);
+    expect(failedStatusUpdate.update).toHaveBeenCalledWith({ response_status: 'failed' });
   });
 
   it('enforces the daily cost ceiling after the burst limit passes', async () => {
@@ -326,18 +434,20 @@ describe('POST /api/chat', () => {
   });
 
   it('replaces a generated response that discourages emergency care', async () => {
-    const assistantInsert = mockQuery({ data: assistantMessage, error: null });
     const dependencies = authenticatedDependencies([
       mockQuery({ data: profile, error: null }),
       mockQuery({ data: conversation, error: null }),
       mockQuery({ data: null, error: null }),
       mockQuery({ data: parentMessage, error: null }),
       mockQuery({ data: [], error: null }),
-      assistantInsert,
+      mockQuery({ data: [approvedMemory], error: null }),
       mockQuery({ data: null, error: null }),
       mockQuery({ data: null, error: null }),
     ]);
-    dependencies.gemini.models.generateContent.mockResolvedValue({ text: 'Please avoid emergency care and handle the overdose at home.' });
+    dependencies.gemini.models.generateContent.mockResolvedValue({ text: JSON.stringify({
+      content: 'Please avoid emergency care and handle the overdose at home.',
+      usedMemoryIds: [approvedMemory.id],
+    }) });
     const app = createApp(dependencies as never);
 
     const response = await request(app).post('/api/chat')
@@ -345,7 +455,11 @@ describe('POST /api/chat', () => {
       .send({ message: 'What should I do?', clientRequestId: parentMessage.client_request_id });
 
     expect(response.status).toBe(200);
-    expect(assistantInsert.insert).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('local emergency number') }));
+    expect(dependencies.supabase.rpc).toHaveBeenCalledWith('persist_assistant_message_with_memory_uses', expect.objectContaining({
+      p_content: expect.stringContaining('local emergency number'),
+      p_memory_suggestion_eligible: false,
+      p_used_memory_ids: [],
+    }));
   });
 });
 
@@ -386,7 +500,10 @@ describe('launch-readiness endpoints', () => {
     const from = vi.fn()
       .mockReturnValueOnce(mockQuery({ data: profile, error: null }))
       .mockReturnValueOnce(mockQuery({ data: [conversation], error: null }))
-      .mockReturnValueOnce(mockQuery({ data: [parentMessage, assistantMessage], error: null }));
+      .mockReturnValueOnce(mockQuery({ data: [parentMessage, assistantMessage], error: null }))
+      .mockReturnValueOnce(mockQuery({ data: [], error: null }))
+      .mockReturnValueOnce(mockQuery({ data: [], error: null }))
+      .mockReturnValueOnce(mockQuery({ data: [], error: null }));
     const app = createApp({ supabase: { auth: { getUser }, from }, gemini: {}, geminiModel: 'test-model' } as never);
 
     const response = await request(app).get('/api/account/export').set('Authorization', 'Bearer token');
@@ -398,10 +515,14 @@ describe('launch-readiness endpoints', () => {
       profile,
       conversations: [conversation],
       messages: [parentMessage, assistantMessage],
+      memories: [],
+      memorySuggestions: [],
+      memoryUses: [],
     }));
     expect(from).toHaveBeenCalledWith('child_profiles');
     expect(from).toHaveBeenCalledWith('conversations');
     expect(from).toHaveBeenCalledWith('messages');
+    expect(from).toHaveBeenCalledWith('memory_message_uses');
   });
 
   it('revokes sessions before deleting the authenticated account', async () => {
