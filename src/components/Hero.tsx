@@ -16,7 +16,7 @@ export default function Hero() {
     <section 
       id="hero-section"
       ref={containerRef}
-      className="relative pt-12 pb-20 md:pt-20 md:pb-32 px-6 flex flex-col items-center text-center overflow-hidden"
+      className="relative px-6 pt-4 pb-10 sm:pt-10 sm:pb-20 md:pt-16 md:pb-28 flex flex-col items-center text-center overflow-hidden"
     >
       {/* Scroll-responsive natural abstract shapes (sage & terracotta) */}
       <motion.div
@@ -67,7 +67,7 @@ export default function Hero() {
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 1, ease: 'easeOut' }}
-          className="mb-2"
+          className="h-14 w-20 sm:h-24 sm:w-24 md:h-32 md:w-32 flex items-center justify-center mb-1 sm:mb-2 [&>div]:scale-[0.48] sm:[&>div]:scale-75 md:[&>div]:scale-100"
         >
           <CalmPlant />
         </motion.div>
@@ -78,10 +78,10 @@ export default function Hero() {
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.2 }}
-          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-sage/10 border border-sage/20 text-xs font-medium tracking-wide text-sage uppercase mb-8"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-sage/10 border border-sage/20 text-[10px] sm:text-xs font-medium tracking-wide text-sage uppercase mb-4 sm:mb-7"
         >
           <span className="h-1.5 w-1.5 rounded-full bg-sage animate-pulse" />
-          <span>Early access for parents of children ages 1–6</span>
+          <span>For parents of children ages 1–6</span>
         </motion.div>
 
         {/* Headline */}
@@ -90,9 +90,9 @@ export default function Hero() {
           initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.3 }}
-          className="font-serif text-[42px] sm:text-5xl md:text-[64px] leading-[1.12] md:leading-[1.1] font-medium tracking-tight text-ink max-w-3xl"
+          className="font-serif text-[34px] sm:text-5xl md:text-[64px] leading-[1.08] md:leading-[1.06] font-medium tracking-tight text-ink max-w-4xl"
         >
-          A parenting coach that <span className="text-terracotta italic font-serif">remembers</span> your child.
+          Parenting guidance that remembers <span className="text-terracotta italic font-serif">what works</span> for your child.
         </motion.h1>
 
         {/* Subhead */}
@@ -101,9 +101,9 @@ export default function Hero() {
           initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.4 }}
-          className="font-sans text-lg md:text-xl opacity-80 leading-relaxed max-w-xl mt-6 mb-10"
+          className="font-sans text-[15px] sm:text-lg md:text-xl text-ink/80 leading-relaxed max-w-2xl mt-4 sm:mt-6 mb-5 sm:mb-9"
         >
-          Cache is an AI parenting coach that remembers your child's routines, temperament, triggers, and what you've already tried—so you can get practical guidance without starting over every time.
+          When bedtime, big emotions, routines, or transitions get hard, Cache uses the context you share and what you have already tried to suggest a practical next step.
         </motion.p>
 
         {/* Form Container */}
@@ -114,7 +114,12 @@ export default function Hero() {
           transition={{ duration: 0.6, delay: 0.5 }}
           className="w-full max-w-md"
         >
-          <WaitlistForm idPrefix="hero" />
+          <WaitlistForm
+            idPrefix="hero"
+            heading="Get early access"
+            buttonLabel="Get early access"
+            supportingCopy="Join the waitlist. We'll send invitations as spots open and occasional opportunities to help shape Cache."
+          />
         </motion.div>
       </div>
     </section>
