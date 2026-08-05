@@ -4,18 +4,18 @@ export default function HowItWorks() {
   const steps = [
     {
       number: "01",
-      title: "Share the context",
-      description: "Tell Cache about your child's age, temperament, routines, current challenges, and anything you want it to remember."
+      title: "Share context once",
+      description: "Tell Cache the routines, temperament, current challenges, and other details you want it to remember."
     },
     {
       number: "02",
       title: "Ask when something comes up",
-      description: "Type or leave a voice note whenever you want help thinking through a routine, behavior, or difficult moment."
+      description: "Send a message when you want help thinking through a routine, behavior, or difficult moment."
     },
     {
       number: "03",
-      title: "Get a practical next step",
-      description: "Cache uses your child's history and previous conversations to offer guidance that fits the situation."
+      title: "Build on their history",
+      description: "Get a practical next step informed by the context you shared and what you have already tried."
     }
   ];
 
@@ -43,7 +43,7 @@ export default function HowItWorks() {
   return (
     <section 
       id="how-it-works-section"
-      className="py-20 md:py-28 px-6 bg-cream relative border-b border-ink/10"
+      className="py-16 md:py-24 px-6 bg-cream relative border-b border-ink/10"
     >
       <div className="max-w-5xl mx-auto">
         {/* Heading */}
@@ -52,20 +52,30 @@ export default function HowItWorks() {
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, margin: "-120px" }}
           transition={{ duration: 0.9, ease: [0.25, 0.1, 0.25, 1.0] }}
-          className="text-center max-w-2xl mx-auto mb-16 md:mb-20"
+          className="text-center max-w-2xl mx-auto mb-10 md:mb-14"
         >
           <h2 
             id="how-it-works-heading"
             className="font-serif text-3xl sm:text-4xl font-medium tracking-tight text-ink mb-6 italic"
           >
-            Share the context once. Build on it over time.
+            From “what now?” to a next step that fits.
           </h2>
           <p 
             id="how-it-works-sub"
             className="font-sans text-base text-ink/80 leading-relaxed"
           >
-            Cache keeps the details that matter close, so each new conversation can begin where the last one left off.
+            Generic advice starts with an average child. Cache starts with the context you choose to share.
           </p>
+          <div className="mt-6 flex flex-wrap justify-center gap-2" aria-label="Everyday parenting use cases">
+            {['Sleep', 'Big emotions', 'Routines', 'Transitions'].map((useCase) => (
+              <span
+                key={useCase}
+                className="rounded-full border border-terracotta/15 bg-terracotta/5 px-3.5 py-2 text-xs font-semibold text-terracotta"
+              >
+                {useCase}
+              </span>
+            ))}
+          </div>
         </motion.div>
 
         {/* Steps Grid */}
@@ -75,7 +85,7 @@ export default function HowItWorks() {
           initial="hidden"
           whileInView="visible"
           viewport={{ once: true, margin: "-100px" }}
-          className="grid md:grid-cols-3 gap-10 md:gap-8"
+          className="grid md:grid-cols-3 gap-5 md:gap-8"
         >
           {steps.map((step, idx) => (
             <motion.div 

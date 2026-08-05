@@ -18,7 +18,8 @@ Cache is a passwordless AI parenting coach that retains a parent-provided child 
 6. Start Vite in another terminal: `npm run dev`
 
 For production, `npm run build` compiles both the client and API into `dist/`.
-Run the combined server with `npm start`.
+Run the combined server with `npm start` (or `npm run preview`). Do not deploy the
+Vite static bundle by itself: account and chat actions require the Express API.
 
 ## Testing
 
@@ -40,3 +41,16 @@ The test suite uses mocked Supabase and Gemini responses, so it does not require
 - Pending requests older than `CHAT_REQUEST_STALE_SECONDS` (90 seconds by
   default) can be reclaimed safely after an interrupted server request.
 - The chat endpoint verifies a Supabase access token, reads the caller's profile, and persists messages server-side. Database row-level security keeps browser access scoped to its owner.
+- `GET /healthz` is the process liveness endpoint. `GET /readyz` also checks
+  Supabase connectivity and returns `503` when Cache cannot safely serve chat.
+- Authenticated parents can download a versioned JSON export at
+  `GET /api/account/export`, or permanently delete their account at
+  `DELETE /api/account`. Account deletion revokes refresh sessions before
+  deleting the Supabase Auth user; the existing foreign-key cascades remove
+  application data immediately. Provider backups follow their normal
+  retention lifecycle.
+- Set `SENTRY_DSN` and `VITE_SENTRY_DSN` to enable sanitized server and browser
+  error reporting. Cache removes request bodies, headers, cookies, and user
+  data before reporting events. Monitor `/readyz` and create an alert for
+  repeated `chat_request_failed`, `readiness_failed`, or `safety_handoff`
+  events; never add prompts or profile data to operational logs.

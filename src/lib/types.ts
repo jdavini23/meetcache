@@ -27,4 +27,25 @@ export interface Message {
   role: 'parent' | 'assistant';
   content: string;
   created_at: string;
+  client_request_id?: string | null;
+  response_status?: 'pending' | 'failed' | 'completed' | null;
+  processing_started_at?: string | null;
+  memory_suggestion_eligible?: boolean;
+  used_memories?: UsedMemory[];
+}
+
+export type MemoryType = 'trigger' | 'helps' | 'worsens' | 'parent_preference' | 'recurring_situation' | 'routine' | 'school_context' | 'sensory_context';
+
+export interface MemorySuggestion {
+  id: string;
+  assistant_message_id: string;
+  suggested_type: MemoryType;
+  suggested_content: string;
+  decision: 'pending' | 'accepted' | 'edited' | 'rejected';
+}
+
+export interface UsedMemory {
+  memory_id: string | null;
+  memory_type: MemoryType;
+  content: string;
 }

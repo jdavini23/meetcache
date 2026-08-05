@@ -24,7 +24,7 @@ export default function Navbar({ onJoinClick }: NavbarProps) {
           onClick={onJoinClick}
           className="font-sans text-sm font-medium border border-ink px-5 py-2 rounded-full hover:bg-ink hover:text-cream transition-colors duration-200 cursor-pointer shadow-sm active:scale-[0.98]"
         >
-          Join early access
+          Get early access
         </button>
       </div>
     </nav>
