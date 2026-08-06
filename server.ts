@@ -46,6 +46,8 @@ type StoredMessage = {
 
 const memoryTypes = ['trigger', 'helps', 'worsens', 'parent_preference', 'recurring_situation', 'routine', 'school_context', 'sensory_context'] as const;
 type MemoryType = typeof memoryTypes[number];
+const memoryLimit = 12;
+const clientProductEvents = ['app_session_started', 'memory_manager_opened', 'memory_use_disclosure_opened'] as const;
 
 type GeneratedMemorySuggestion = {
   type: MemoryType;
@@ -188,8 +190,8 @@ function logEvent(event: string, requestId: string, details: Record<string, stri
   console.info(JSON.stringify({ event, requestId, ...details }));
 }
 
-function sendError(response: express.Response, status: number, error: string) {
-  return response.status(status).json({ error, requestId: response.locals.requestId });
+function sendError(response: express.Response, status: number, error: string, code?: string) {
+  return response.status(status).json({ error, ...(code ? { code } : {}), requestId: response.locals.requestId });
 }
 
 async function getAuthenticatedUser(request: express.Request, response: express.Response, supabase: any) {
@@ -256,22 +258,117 @@ export function createApp({
     }
   });
 
+  app.get('/api/memories', async (request, response) => {
+    const authenticated = await getAuthenticatedUser(request, response, supabase);
+    if (!authenticated) return;
+
+    try {
+      const { data, error } = await supabase.from('child_memories')
+        .select('id, child_profile_id, memory_type, content, parent_action, created_at, updated_at')
+        .eq('user_id', authenticated.user.id)
+        .order('updated_at', { ascending: false });
+      if (error) throw error;
+      return response.status(200).json({ memories: data ?? [], limit: memoryLimit });
+    } catch (error) {
+      Sentry.captureException(error, { tags: { event: 'memories_load_failed' } });
+      logEvent('memories_load_failed', response.locals.requestId);
+      return sendError(response, 500, 'Cache could not load saved memories right now.');
+    }
+  });
+
+  app.patch('/api/memories/:id', async (request, response) => {
+    const memoryId = request.params.id;
+    const content = typeof request.body?.content === 'string' ? request.body.content.trim() : '';
+    if (!uuidPattern.test(memoryId) || !content || content.length > 280 || unsafeMemoryPattern.test(content)) {
+      return sendError(response, 400, 'That memory could not be saved.');
+    }
+    const authenticated = await getAuthenticatedUser(request, response, supabase);
+    if (!authenticated) return;
+
+    try {
+      const { data, error } = await supabase.rpc('update_child_memory', {
+        p_memory_id: memoryId,
+        p_user_id: authenticated.user.id,
+        p_content: content,
+      });
+      if (error) {
+        if (error.message?.includes('not found')) return sendError(response, 404, 'Memory not found.');
+        throw error;
+      }
+      return response.status(200).json({ memory: data });
+    } catch (error) {
+      Sentry.captureException(error, { tags: { event: 'memory_update_failed' } });
+      logEvent('memory_update_failed', response.locals.requestId);
+      return sendError(response, 500, 'Cache could not update that memory right now.');
+    }
+  });
+
+  app.delete('/api/memories/:id', async (request, response) => {
+    const memoryId = request.params.id;
+    if (!uuidPattern.test(memoryId)) return sendError(response, 400, 'That memory could not be removed.');
+    const authenticated = await getAuthenticatedUser(request, response, supabase);
+    if (!authenticated) return;
+
+    try {
+      const { error } = await supabase.rpc('delete_child_memory', {
+        p_memory_id: memoryId,
+        p_user_id: authenticated.user.id,
+      });
+      if (error) {
+        if (error.message?.includes('not found')) return sendError(response, 404, 'Memory not found.');
+        throw error;
+      }
+      return response.status(204).send();
+    } catch (error) {
+      Sentry.captureException(error, { tags: { event: 'memory_delete_failed' } });
+      logEvent('memory_delete_failed', response.locals.requestId);
+      return sendError(response, 500, 'Cache could not remove that memory right now.');
+    }
+  });
+
+  app.post('/api/product-events', async (request, response) => {
+    const eventName = request.body?.eventName;
+    const subjectId = request.body?.subjectId;
+    const clientEventId = request.body?.clientEventId;
+    if (!clientProductEvents.includes(eventName) || !uuidPattern.test(subjectId) || !uuidPattern.test(clientEventId)) {
+      return sendError(response, 400, 'That product event is not supported.');
+    }
+    const authenticated = await getAuthenticatedUser(request, response, supabase);
+    if (!authenticated) return;
+
+    try {
+      const { error } = await supabase.from('product_events').insert({
+        user_id: authenticated.user.id,
+        event_name: eventName,
+        subject_id: subjectId,
+        client_event_id: clientEventId,
+      });
+      if (error && error.code !== '23505') throw error;
+      return response.status(204).send();
+    } catch (error) {
+      Sentry.captureException(error, { tags: { event: 'product_event_failed' } });
+      logEvent('product_event_failed', response.locals.requestId);
+      return sendError(response, 500, 'Cache could not record that event.');
+    }
+  });
+
   app.get('/api/account/export', async (request, response) => {
     const authenticated = await getAuthenticatedUser(request, response, supabase);
     if (!authenticated) return;
 
     try {
       const userId = authenticated.user.id;
-      const [profileResult, conversationsResult, messagesResult, memoriesResult, suggestionsResult, memoryUsesResult] = await Promise.all([
+      const [profileResult, conversationsResult, messagesResult, memoriesResult, suggestionsResult, memoryUsesResult, productEventsResult] = await Promise.all([
         supabase.from('child_profiles').select().eq('user_id', userId).maybeSingle(),
         supabase.from('conversations').select().eq('user_id', userId).order('created_at'),
         supabase.from('messages').select().eq('user_id', userId).order('created_at'),
         supabase.from('child_memories').select().eq('user_id', userId).order('created_at'),
         supabase.from('memory_suggestions').select().eq('user_id', userId).order('created_at'),
         supabase.from('memory_message_uses').select().eq('user_id', userId).order('created_at'),
+        supabase.from('product_events').select().eq('user_id', userId).order('created_at'),
       ]);
-      if (profileResult.error || conversationsResult.error || messagesResult.error || memoriesResult.error || suggestionsResult.error || memoryUsesResult.error) {
-        throw profileResult.error ?? conversationsResult.error ?? messagesResult.error ?? memoriesResult.error ?? suggestionsResult.error ?? memoryUsesResult.error;
+      if (profileResult.error || conversationsResult.error || messagesResult.error || memoriesResult.error || suggestionsResult.error || memoryUsesResult.error || productEventsResult.error) {
+        throw profileResult.error ?? conversationsResult.error ?? messagesResult.error ?? memoriesResult.error ?? suggestionsResult.error ?? memoryUsesResult.error ?? productEventsResult.error;
       }
 
       const exportData = {
@@ -283,6 +380,7 @@ export function createApp({
         memories: memoriesResult.data ?? [],
         memorySuggestions: suggestionsResult.data ?? [],
         memoryUses: memoryUsesResult.data ?? [],
+        productEvents: productEventsResult.data ?? [],
       };
       logEvent('account_exported', response.locals.requestId);
       response.attachment('cache-data-export.json');
@@ -413,8 +511,11 @@ export function createApp({
         p_action: action,
         p_content: action === 'accept' ? content : null,
       });
-      if (error) return sendError(response, error.message.includes('not found') ? 404 : 409, 'That memory suggestion is no longer available.');
-      return response.status(200).json({ result: data });
+      if (error) {
+        if (error.message.includes('memory_limit_reached')) return sendError(response, 409, 'Cache can remember up to 12 details. Remove one before saving another.', 'memory_limit_reached');
+        return sendError(response, error.message.includes('not found') ? 404 : 409, 'That memory suggestion is no longer available.');
+      }
+      return response.status(200).json({ result: data, ...(data?.memory ? { memory: data.memory } : {}) });
     } catch (error) {
       Sentry.captureException(error, { tags: { event: 'memory_suggestion_resolve_failed' } });
       logEvent('memory_suggestion_resolve_failed', response.locals.requestId);

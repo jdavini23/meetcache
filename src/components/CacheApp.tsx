@@ -1,11 +1,14 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
-import type { KeyboardEvent, ReactNode, RefObject } from 'react';
-import { AlertCircle, ArrowRight, ChevronDown, ChevronUp, Info, Loader2, LogOut, Pencil, Send, ShieldCheck, Sparkles, X } from 'lucide-react';
+import type { KeyboardEvent, RefObject } from 'react';
+import { AlertCircle, ArrowRight, ChevronUp, Info, Loader2, LogOut, Send, ShieldCheck, Sparkles, X } from 'lucide-react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
-import { formatChildAge, isChildAgeSupported } from '../lib/childAge';
-import type { ChildProfile, Conversation, MemorySuggestion, Message, UsedMemory } from '../lib/types';
+import { formatChildAge } from '../lib/childAge';
+import type { ChildMemory, ChildProfile, Conversation, MemorySuggestion, Message, UsedMemory } from '../lib/types';
 import ChatMarkdown from './ChatMarkdown';
+import AccountPanel from './cache/AccountPanel';
+import { ContextPanel, MemorySuggestionCard, MemoryUseDisclosure } from './cache/MemoryPanels';
+import ProfileForm from './cache/ProfileForm';
 
 type AppState = 'loading' | 'signed-out' | 'onboarding' | 'ready' | 'error';
 
@@ -13,22 +16,6 @@ interface FailedChatRequest {
   content: string;
   clientRequestId: string;
 }
-
-function ageLabel(profile: ChildProfile) {
-  return formatChildAge(profile.birth_month, profile.birth_year);
-}
-
-function profileUpdatedLabel(updatedAt: string) {
-  const updated = new Date(updatedAt);
-  if (Number.isNaN(updated.getTime())) return 'Last updated recently';
-
-  const daysSinceUpdate = Math.floor((Date.now() - updated.getTime()) / 86_400_000);
-  if (daysSinceUpdate <= 0) return 'Updated today';
-  if (daysSinceUpdate === 1) return 'Updated yesterday';
-  return `Updated ${new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric' }).format(updated)}`;
-}
-
-const currentYear = new Date().getFullYear();
 
 const starterPrompts = [
   'Help me think through a tough moment.',
@@ -39,6 +26,11 @@ const starterPrompts = [
 const CHAT_POLL_INTERVAL_MS = 1_000;
 const CHAT_ATTEMPT_TIMEOUT_MS = 10_000;
 const CHAT_REQUEST_TIMEOUT_MS = 95_000;
+const MEMORY_LIMIT = 12;
+
+function isDesktopLayout() {
+  return typeof window.matchMedia === 'function' && window.matchMedia('(min-width: 1024px)').matches;
+}
 
 class ChatRequestError extends Error {
   requestId?: string;
@@ -67,7 +59,9 @@ function useModalFocus(
     const focusableElements = (): HTMLElement[] => dialog
       ? Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector))
       : [];
-    (initialFocusRef?.current ?? focusableElements()[0])?.focus();
+    if (!dialog?.contains(document.activeElement)) {
+      (initialFocusRef?.current ?? focusableElements()[0])?.focus();
+    }
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -97,149 +91,6 @@ function useModalFocus(
   }, [dialogRef, initialFocusRef, isOpen, onClose, returnFocusRef]);
 }
 
-interface ProfileFormProps {
-  initialProfile?: ChildProfile;
-  onSave: (profile: ChildProfile) => void;
-  onCancel?: () => void;
-}
-
-type ProfileField = 'nickname' | 'birthDate' | 'routines' | 'challenges';
-type ProfileErrors = Partial<Record<ProfileField, string>>;
-
-interface ProfileValues {
-  nickname: string;
-  birthMonth: string;
-  birthYear: string;
-  pronouns: string;
-  routines: string;
-  challenges: string;
-  parentNotes: string;
-}
-
-function validateProfile(values: ProfileValues): ProfileErrors {
-  const errors: ProfileErrors = {};
-  const month = Number(values.birthMonth);
-  const year = Number(values.birthYear);
-  if (!values.nickname.trim()) errors.nickname = 'Add the name you use for your child.';
-  if (!month || !year) errors.birthDate = 'Choose a birth month and year.';
-  else if (month < 1 || month > 12 || !isChildAgeSupported(month, year)) errors.birthDate = 'Cache currently supports children ages 1 through 6. Please check the birth month and year.';
-  if (!values.routines.trim()) errors.routines = 'Share a little about your child’s usual routines.';
-  if (!values.challenges.trim()) errors.challenges = 'Share what feels challenging right now.';
-  return errors;
-}
-
-interface FormSectionProps {
-  eyebrow: string;
-  title: string;
-  description: string;
-  children: ReactNode;
-}
-
-function FormSection({ eyebrow, title, description, children }: FormSectionProps) {
-  return <section className="context-form-section">
-    <p className="app-eyebrow">{eyebrow}</p>
-    <h2 className="mt-2 font-serif text-2xl">{title}</h2>
-    <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink/65">{description}</p>
-    <div className="mt-5">{children}</div>
-  </section>;
-}
-
-function FieldError({ id, message }: { id: string; message?: string }) {
-  if (!message) return null;
-  return <span id={id} className="context-field-error" role="alert"><AlertCircle className="size-3.5 shrink-0" />{message}</span>;
-}
-
-function CharacterCount({ current, maximum }: { current: number; maximum: number }) {
-  return <span className="context-character-count" aria-live="polite">{current} / {maximum}</span>;
-}
-
-function ProfileForm({ initialProfile, onSave, onCancel }: ProfileFormProps) {
-  const [values, setValues] = useState<ProfileValues>({
-    nickname: initialProfile?.nickname ?? '', birthMonth: String(initialProfile?.birth_month ?? ''), birthYear: String(initialProfile?.birth_year ?? ''),
-    pronouns: initialProfile?.pronouns ?? '', routines: initialProfile?.routines ?? '', challenges: initialProfile?.challenges ?? '', parentNotes: initialProfile?.parent_notes ?? '',
-  });
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState('');
-  const [errors, setErrors] = useState<ProfileErrors>({});
-  const [touched, setTouched] = useState<Partial<Record<ProfileField, boolean>>>({});
-  const [submitted, setSubmitted] = useState(false);
-  const [optionalDetailsOpen, setOptionalDetailsOpen] = useState(Boolean(initialProfile?.pronouns || initialProfile?.parent_notes));
-  const nicknameRef = useRef<HTMLInputElement>(null);
-  const birthMonthRef = useRef<HTMLSelectElement>(null);
-  const routinesRef = useRef<HTMLTextAreaElement>(null);
-  const challengesRef = useRef<HTMLTextAreaElement>(null);
-
-  const updateValue = <Field extends keyof ProfileValues>(field: Field, value: ProfileValues[Field]) => {
-    const nextValues = { ...values, [field]: value };
-    setValues(nextValues);
-    setErrors(validateProfile(nextValues));
-    setSaveError('');
-  };
-
-  const markTouched = (field: ProfileField) => {
-    setTouched((current) => ({ ...current, [field]: true }));
-    setErrors(validateProfile(values));
-  };
-
-  const displayedError = (field: ProfileField) => submitted || touched[field] ? errors[field] : undefined;
-  const describedBy = (helpId: string, errorId: string, error?: string) => error ? `${helpId} ${errorId}` : helpId;
-
-  const handleSubmit = async (event: FormEvent) => {
-    event.preventDefault();
-    const nextErrors = validateProfile(values);
-    setSubmitted(true);
-    setTouched({ nickname: true, birthDate: true, routines: true, challenges: true });
-    setErrors(nextErrors);
-    const firstInvalid = Object.keys(nextErrors)[0] as ProfileField | undefined;
-    if (firstInvalid) {
-      const fields = { nickname: nicknameRef, birthDate: birthMonthRef, routines: routinesRef, challenges: challengesRef };
-      window.setTimeout(() => fields[firstInvalid]?.current?.focus(), 0);
-      return;
-    }
-
-    setSaving(true);
-    setSaveError('');
-    const payload = {
-      nickname: values.nickname.trim(), birth_month: Number(values.birthMonth), birth_year: Number(values.birthYear), pronouns: values.pronouns.trim() || null,
-      routines: values.routines.trim(), challenges: values.challenges.trim(), parent_notes: values.parentNotes.trim() || null,
-    };
-    const request = initialProfile
-      ? supabase.from('child_profiles').update(payload).eq('id', initialProfile.id).select().single()
-      : supabase.from('child_profiles').insert(payload).select().single();
-    const { data, error: saveError } = await request;
-    setSaving(false);
-    if (saveError || !data) {
-      setSaveError('We could not save this context. Your answers are still here—please try again.');
-      return;
-    }
-    onSave(data as ChildProfile);
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-5" noValidate>
-      {submitted && Object.keys(errors).length > 0 && <div className="context-error-summary" role="alert"><AlertCircle className="mt-0.5 size-4 shrink-0" /><div><p className="font-semibold">A few details need your attention.</p><p className="mt-0.5">Please review the highlighted fields and try again.</p></div></div>}
-      <FormSection eyebrow="The essentials" title="About your child" description="A few basics help Cache keep the guidance relevant from the start.">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <label className="context-form-label" htmlFor="profile-nickname">Child’s nickname <span aria-hidden="true" className="text-terracotta">*</span><input ref={nicknameRef} id="profile-nickname" value={values.nickname} onChange={(event) => updateValue('nickname', event.target.value)} onBlur={() => markTouched('nickname')} className="app-input mt-2" placeholder="Milo" maxLength={80} required aria-required="true" aria-invalid={Boolean(displayedError('nickname'))} aria-describedby={describedBy('profile-nickname-help', 'profile-nickname-error', displayedError('nickname'))} /><span id="profile-nickname-help" className="context-field-help">Use the name that feels natural at home.</span><FieldError id="profile-nickname-error" message={displayedError('nickname')} /></label>
-          <fieldset className="context-form-label" aria-describedby={describedBy('profile-birth-help', 'profile-birth-error', displayedError('birthDate'))}><legend>Birth month and year <span aria-hidden="true" className="text-terracotta">*</span></legend><div className="mt-2 grid grid-cols-2 gap-2"><label className="sr-only" htmlFor="profile-birth-month">Birth month</label><select ref={birthMonthRef} id="profile-birth-month" value={values.birthMonth} onChange={(event) => updateValue('birthMonth', event.target.value)} onBlur={() => markTouched('birthDate')} className="app-input" required aria-required="true" aria-invalid={Boolean(displayedError('birthDate'))}><option value="">Month</option>{Array.from({ length: 12 }, (_, index) => <option key={index + 1} value={index + 1}>{new Date(2000, index, 1).toLocaleString('en', { month: 'long' })}</option>)}</select><label className="sr-only" htmlFor="profile-birth-year">Birth year</label><select id="profile-birth-year" value={values.birthYear} onChange={(event) => updateValue('birthYear', event.target.value)} onBlur={() => markTouched('birthDate')} className="app-input" required aria-required="true" aria-invalid={Boolean(displayedError('birthDate'))}><option value="">Year</option>{Array.from({ length: 8 }, (_, index) => currentYear - index).map((year) => <option key={year} value={year}>{year}</option>)}</select></div><span id="profile-birth-help" className="context-field-help">Cache currently supports ages 1 through 6.</span><FieldError id="profile-birth-error" message={displayedError('birthDate')} /></fieldset>
-        </div>
-      </FormSection>
-      <FormSection eyebrow="Your day to day" title="What life looks like right now" description="A little context helps Cache offer ideas that fit your family, not generic advice.">
-        <div className="space-y-5">
-          <label className="context-form-label block" htmlFor="profile-routines">What are their usual routines? <span aria-hidden="true" className="text-terracotta">*</span><textarea ref={routinesRef} id="profile-routines" value={values.routines} onChange={(event) => updateValue('routines', event.target.value)} onBlur={() => markTouched('routines')} className="app-input mt-2 min-h-28 resize-y" placeholder="Sleep, meals, preschool, transitions…" maxLength={1200} required aria-required="true" aria-invalid={Boolean(displayedError('routines'))} aria-describedby={describedBy('profile-routines-count', 'profile-routines-error', displayedError('routines'))} /><CharacterCount current={values.routines.length} maximum={1200} /><FieldError id="profile-routines-error" message={displayedError('routines')} /></label>
-          <label className="context-form-label block" htmlFor="profile-challenges">What feels challenging right now? <span aria-hidden="true" className="text-terracotta">*</span><textarea ref={challengesRef} id="profile-challenges" value={values.challenges} onChange={(event) => updateValue('challenges', event.target.value)} onBlur={() => markTouched('challenges')} className="app-input mt-2 min-h-28 resize-y" placeholder="Bedtime, big feelings, separation…" maxLength={1200} required aria-required="true" aria-invalid={Boolean(displayedError('challenges'))} aria-describedby={describedBy('profile-challenges-count', 'profile-challenges-error', displayedError('challenges'))} /><CharacterCount current={values.challenges.length} maximum={1200} /><FieldError id="profile-challenges-error" message={displayedError('challenges')} /></label>
-        </div>
-      </FormSection>
-      <section className="context-optional-details">
-        <button type="button" className="flex w-full items-center justify-between gap-3 text-left" onClick={() => setOptionalDetailsOpen((open) => !open)} aria-expanded={optionalDetailsOpen} aria-controls="optional-profile-details"><span><span className="block text-sm font-semibold text-ink">Optional details</span><span className="mt-0.5 block text-sm text-ink/60">Add the little things that might help Cache understand.</span></span><ChevronDown className={`size-5 shrink-0 text-sage transition ${optionalDetailsOpen ? 'rotate-180' : ''}`} /></button>
-        {optionalDetailsOpen && <div id="optional-profile-details" className="mt-5 space-y-5 border-t border-ink/10 pt-5"><label className="context-form-label block" htmlFor="profile-pronouns">Pronouns <span className="font-normal text-ink/50">(optional)</span><input id="profile-pronouns" value={values.pronouns} onChange={(event) => updateValue('pronouns', event.target.value)} className="app-input mt-2" placeholder="they/them" maxLength={40} /><span className="context-field-help">Only if they are useful for how Cache refers to your child.</span></label><label className="context-form-label block" htmlFor="profile-notes">Anything else Cache should know? <span className="font-normal text-ink/50">(optional)</span><textarea id="profile-notes" value={values.parentNotes} onChange={(event) => updateValue('parentNotes', event.target.value)} className="app-input mt-2 min-h-28 resize-y" placeholder="What you have tried, temperament, family context…" maxLength={2000} aria-describedby="profile-notes-count" /><CharacterCount current={values.parentNotes.length} maximum={2000} /></label></div>}
-      </section>
-      {saveError && <div className="context-error-summary" role="alert"><AlertCircle className="mt-0.5 size-4 shrink-0" /><span>{saveError}</span></div>}
-      <div className="context-form-actions"><div><button disabled={saving} className="app-button">{saving ? <Loader2 className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}{saving ? 'Saving context…' : initialProfile ? 'Save context' : 'Start with Cache'}</button>{onCancel && <button type="button" onClick={onCancel} disabled={saving} className="ml-1 rounded-xl px-4 py-3 text-sm font-semibold text-ink/70 transition hover:bg-ink/5 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta">Cancel</button>}</div><p className="mt-2 text-xs leading-relaxed text-ink/50">You can update this context whenever things change.</p></div>
-    </form>
-  );
-}
-
 interface ChatMessageProps {
   message: Message;
 }
@@ -266,104 +117,18 @@ function ChatMessage({ message }: ChatMessageProps) {
   );
 }
 
-interface ContextPanelProps {
-  profile: ChildProfile;
-  onEdit: () => void;
-  editButtonRef?: RefObject<HTMLButtonElement | null>;
-}
-
-function ContextPanel({ profile, onEdit, editButtonRef }: ContextPanelProps) {
-  return <>
-    <p className="app-eyebrow">Saved context</p>
-    <div className="mt-2 flex items-start justify-between gap-3">
-      <div><h2 className="font-serif text-2xl">{profile.nickname}</h2><p className="mt-0.5 text-sm text-ink/65">{ageLabel(profile)}{profile.pronouns ? ` · ${profile.pronouns}` : ''}</p></div>
-      <span className="mt-1 size-2 shrink-0 rounded-full bg-sage" aria-label="Saved context available" />
-    </div>
-    <p className="mt-2 text-xs text-ink/50">{profileUpdatedLabel(profile.updated_at)}</p>
-    <p className="mt-4 text-sm leading-relaxed text-ink/65">Cache keeps these details in mind as you talk.</p>
-    <div className="mt-5 space-y-4 border-t border-ink/10 pt-5 text-sm">
-      <section>
-        <h3 className="mb-1 font-semibold text-ink">Routines</h3>
-        <p className="leading-relaxed text-ink/70">{profile.routines}</p>
-      </section>
-      <section>
-        <h3 className="mb-1 font-semibold text-ink">Right now</h3>
-        <p className="leading-relaxed text-ink/70">{profile.challenges}</p>
-      </section>
-      {profile.parent_notes && <section>
-        <h3 className="mb-1 font-semibold text-ink">Other notes</h3>
-        <p className="leading-relaxed text-ink/70">{profile.parent_notes}</p>
-      </section>}
-    </div>
-    <button ref={editButtonRef} onClick={onEdit} className="mt-6 flex items-center gap-2 rounded-lg px-1 py-2 text-sm font-semibold text-sage transition hover:bg-sage/10 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta"><Pencil className="size-4" />Edit saved context</button>
-  </>;
-}
-
-interface AccountPanelProps {
-  exporting: boolean;
-  deleting: boolean;
-  deleteConfirmation: string;
-  onExport: () => void;
-  onDeleteConfirmationChange: (value: string) => void;
-  onDelete: () => void;
-}
-
-function AccountPanel({ exporting, deleting, deleteConfirmation, onExport, onDeleteConfirmationChange, onDelete }: AccountPanelProps) {
-  return <>
-    <p className="app-eyebrow">Your account</p>
-    <h2 className="mt-2 font-serif text-2xl">Data and privacy</h2>
-    <p className="mt-3 text-sm leading-relaxed text-ink/70">Download your saved context and chat history, or permanently delete your Cache account and application data.</p>
-    <button type="button" onClick={onExport} disabled={exporting || deleting} className="app-button mt-6">{exporting ? <Loader2 className="size-4 animate-spin" /> : null}{exporting ? 'Preparing download…' : 'Download my data'}</button>
-    <div className="mt-8 border-t border-red-700/20 pt-6">
-      <h3 className="font-serif text-xl text-red-800">Delete account</h3>
-      <p className="mt-2 text-sm leading-relaxed text-ink/70">This immediately removes your Cache account, saved child context, and conversation history. Provider backups follow their normal retention lifecycle.</p>
-      <label className="mt-4 block text-sm font-medium text-ink" htmlFor="delete-confirmation">Type DELETE to confirm<input id="delete-confirmation" className="app-input mt-2" value={deleteConfirmation} onChange={(event) => onDeleteConfirmationChange(event.target.value)} autoComplete="off" /></label>
-      <button type="button" onClick={onDelete} disabled={deleting || deleteConfirmation !== 'DELETE'} className="mt-4 rounded-xl bg-red-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-50">{deleting ? 'Deleting account…' : 'Delete my account and data'}</button>
-    </div>
-  </>;
-}
-
-function MemorySuggestionCard({ suggestions, onResolve }: { suggestions: MemorySuggestion[]; onResolve: (suggestion: MemorySuggestion, action: 'accept' | 'reject', content?: string) => void }) {
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState('');
-  if (!suggestions.length) return null;
-
-  return <section className="memory-suggestion-card" aria-label="Memory suggestions">
-    <p className="text-sm font-semibold text-ink">Want me to remember anything from this?</p>
-    <p className="mt-1 text-xs leading-relaxed text-ink/60">You choose what Cache saves. Nothing is added unless you save it.</p>
-    <div className="mt-3 space-y-2">
-      {suggestions.map((suggestion) => <div key={suggestion.id} className="rounded-xl border border-sage/20 bg-white/70 p-3">
-        {editingId === suggestion.id ? <>
-          <label className="sr-only" htmlFor={`memory-suggestion-${suggestion.id}`}>Edit memory suggestion</label>
-          <textarea id={`memory-suggestion-${suggestion.id}`} value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={280} className="app-input min-h-20 resize-y" />
-          <div className="mt-2 flex gap-2"><button type="button" onClick={() => { onResolve(suggestion, 'accept', draft); setEditingId(null); }} disabled={!draft.trim()} className="memory-suggestion-save">Save memory</button><button type="button" onClick={() => setEditingId(null)} className="memory-suggestion-secondary">Cancel</button></div>
-        </> : <>
-          <p className="text-sm leading-relaxed text-ink">{suggestion.suggested_content}</p>
-          <div className="mt-2 flex flex-wrap gap-2"><button type="button" onClick={() => onResolve(suggestion, 'accept')} className="memory-suggestion-save">Save</button><button type="button" onClick={() => { setDraft(suggestion.suggested_content); setEditingId(suggestion.id); }} className="memory-suggestion-secondary">Edit</button><button type="button" onClick={() => onResolve(suggestion, 'reject')} className="memory-suggestion-secondary">Dismiss</button></div>
-        </>}
-      </div>)}
-    </div>
-  </section>;
-}
-
-function MemoryUseDisclosure({ memories }: { memories: UsedMemory[] }) {
-  if (!memories.length) return null;
-  return <details className="group mt-2 max-w-xl text-xs text-ink/60">
-    <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-lg px-2 py-1 font-medium transition hover:bg-sage/10 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta">
-      <span>Using saved context</span><ChevronDown className="size-3.5 transition group-open:rotate-180" aria-hidden="true" />
-    </summary>
-    <ul className="mt-1.5 space-y-1.5 rounded-xl border border-sage/15 bg-sage/5 px-3 py-2.5" aria-label="Saved context used for this reply">
-      {memories.map((memory, index) => <li key={`${memory.memory_id ?? 'deleted'}-${index}`} className="leading-relaxed">{memory.content}</li>)}
-    </ul>
-  </details>;
-}
-
 export default function CacheApp() {
   const [appState, setAppState] = useState<AppState>('loading');
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<ChildProfile | null>(null);
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [memories, setMemories] = useState<ChildMemory[]>([]);
+  const [memoriesLoading, setMemoriesLoading] = useState(false);
+  const [memoriesError, setMemoriesError] = useState('');
+  const [memoryLimit, setMemoryLimit] = useState(MEMORY_LIMIT);
+  const [memoryStatus, setMemoryStatus] = useState('');
+  const [focusedMemoryId, setFocusedMemoryId] = useState<string | null>(null);
   const [memorySuggestions, setMemorySuggestions] = useState<Record<string, MemorySuggestion[]>>({});
   const [email, setEmail] = useState('');
   const [notice, setNotice] = useState('');
@@ -380,6 +145,8 @@ export default function CacheApp() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesListRef = useRef<HTMLDivElement>(null);
   const contextDrawerRef = useRef<HTMLElement>(null);
+  const desktopMemoryTargetRef = useRef<HTMLDivElement>(null);
+  const mobileMemoryTargetRef = useRef<HTMLDivElement>(null);
   const accountDialogRef = useRef<HTMLElement>(null);
   const accountCloseButtonRef = useRef<HTMLButtonElement>(null);
   const accountButtonRef = useRef<HTMLButtonElement>(null);
@@ -404,6 +171,45 @@ export default function CacheApp() {
     }, {}));
   };
 
+  const recordProductEvent = (eventName: 'app_session_started' | 'memory_manager_opened' | 'memory_use_disclosure_opened', subjectId: string, accessToken = session?.access_token, clientEventId: string = crypto.randomUUID()) => {
+    if (!accessToken) return;
+    void fetch('/api/product-events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ eventName, subjectId, clientEventId }),
+    }).catch(() => {
+      // Product measurement never blocks the parent experience.
+    });
+  };
+
+  const recordAppSession = (profileId: string, accessToken: string) => {
+    try {
+      const storageKey = 'cache-app-session-event-id';
+      const existingId = window.sessionStorage.getItem(storageKey);
+      const eventId = existingId ?? crypto.randomUUID();
+      if (!existingId) window.sessionStorage.setItem(storageKey, eventId);
+      recordProductEvent('app_session_started', profileId, accessToken, eventId);
+    } catch {
+      recordProductEvent('app_session_started', profileId, accessToken);
+    }
+  };
+
+  const loadMemories = async (accessToken: string) => {
+    setMemoriesLoading(true);
+    setMemoriesError('');
+    try {
+      const response = await fetch('/api/memories', { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (!response.ok) throw new Error('Cache could not load saved memories right now.');
+      const body = await response.json() as { memories?: ChildMemory[]; limit?: number };
+      setMemories(body.memories ?? []);
+      setMemoryLimit(body.limit ?? MEMORY_LIMIT);
+    } catch (error) {
+      setMemoriesError(error instanceof Error ? error.message : 'Cache could not load saved memories right now.');
+    } finally {
+      setMemoriesLoading(false);
+    }
+  };
+
   const loadMemorySuggestions = async (conversationId: string, accessToken: string) => {
     try {
       const response = await fetch(`/api/memory-suggestions?conversationId=${encodeURIComponent(conversationId)}`, { headers: { Authorization: `Bearer ${accessToken}` } });
@@ -422,6 +228,11 @@ export default function CacheApp() {
     if (!profileData) { setProfile(null); setAppState('onboarding'); return; }
     const savedProfile = profileData as ChildProfile;
     setProfile(savedProfile);
+    void loadMemories(activeSession.access_token);
+    recordAppSession(savedProfile.id, activeSession.access_token);
+    if (typeof window.matchMedia === 'function' && window.matchMedia('(min-width: 1024px)').matches) {
+      recordProductEvent('memory_manager_opened', savedProfile.id, activeSession.access_token);
+    }
     const { data: conversationData, error: conversationError } = await supabase.from('conversations').select().eq('child_profile_id', savedProfile.id).maybeSingle();
     if (conversationError) { setNotice('We could not load your conversation. Please refresh and try again.'); setAppState('error'); return; }
     let activeConversation = conversationData as Conversation | null;
@@ -476,7 +287,7 @@ export default function CacheApp() {
     });
     const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
-      if (nextSession) void loadAccount(nextSession); else { setProfile(null); setMessages([]); setMemorySuggestions({}); setAppState('signed-out'); }
+      if (nextSession) void loadAccount(nextSession); else { setProfile(null); setMessages([]); setMemories([]); setMemorySuggestions({}); setAppState('signed-out'); }
     });
     return () => listener.subscription.unsubscribe();
   }, []);
@@ -489,7 +300,7 @@ export default function CacheApp() {
     }
   }, [messages.length, sending]);
 
-  useModalFocus(contextOpen, contextDrawerRef, closeContext);
+  useModalFocus(contextOpen, contextDrawerRef, closeContext, focusedMemoryId ? mobileMemoryTargetRef : undefined);
   useModalFocus(accountOpen, accountDialogRef, closeAccount, accountCloseButtonRef, accountButtonRef);
   useModalFocus(editing, editDialogRef, closeEditing, editCloseButtonRef, editButtonRef);
 
@@ -579,22 +390,81 @@ export default function CacheApp() {
     }
   };
 
-  const resolveMemorySuggestion = async (suggestion: MemorySuggestion, action: 'accept' | 'reject', content?: string) => {
-    if (!session) return;
+  const resolveMemorySuggestion = async (suggestion: MemorySuggestion, action: 'accept' | 'reject', content?: string): Promise<string | null> => {
+    if (!session) return 'Your session has expired. Please sign in again.';
     try {
       const response = await fetch(`/api/memory-suggestions/${suggestion.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({ action, ...(content !== undefined ? { content } : {}) }),
       });
-      if (!response.ok) return;
+      const body = await response.json() as { memory?: ChildMemory; error?: string; code?: string };
+      if (!response.ok) return body.error ?? 'Cache could not save that memory right now.';
       setMemorySuggestions((current) => {
         const remaining = (current[suggestion.assistant_message_id] ?? []).filter((item) => item.id !== suggestion.id);
         return { ...current, [suggestion.assistant_message_id]: remaining };
       });
+      if (action === 'accept' && body.memory) {
+        setMemories((current) => [body.memory!, ...current.filter((memory) => memory.id !== body.memory!.id)]);
+        setMemoryStatus('Saved to What Cache remembers.');
+      }
+      return null;
     } catch {
-      // Preserve the suggestion so the parent can try again later.
+      return 'Cache could not save that memory right now.';
     }
+  };
+
+  const updateMemory = async (memoryId: string, content: string): Promise<string | null> => {
+    if (!session) return 'Your session has expired. Please sign in again.';
+    try {
+      const response = await fetch(`/api/memories/${memoryId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ content }),
+      });
+      const body = await response.json() as { memory?: ChildMemory; error?: string };
+      if (!response.ok || !body.memory) return body.error ?? 'Cache could not update that memory right now.';
+      setMemories((current) => current.map((memory) => memory.id === memoryId ? body.memory! : memory));
+      setMemoryStatus('Saved memory updated.');
+      return null;
+    } catch {
+      return 'Cache could not update that memory right now.';
+    }
+  };
+
+  const deleteMemory = async (memoryId: string): Promise<string | null> => {
+    if (!session) return 'Your session has expired. Please sign in again.';
+    try {
+      const response = await fetch(`/api/memories/${memoryId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (!response.ok) {
+        const body = await response.json() as { error?: string };
+        return body.error ?? 'Cache could not remove that memory right now.';
+      }
+      setMemories((current) => current.filter((memory) => memory.id !== memoryId));
+      setMessages((current) => current.map((message) => ({
+        ...message,
+        used_memories: message.used_memories?.map((memory) => memory.memory_id === memoryId ? { ...memory, memory_id: null } : memory),
+      })));
+      setFocusedMemoryId((current) => current === memoryId ? null : current);
+      setMemoryStatus('Saved memory removed. Cache will not use it again.');
+      return null;
+    } catch {
+      return 'Cache could not remove that memory right now.';
+    }
+  };
+
+  const openMemoryManager = (memoryId?: string) => {
+    if (profile) recordProductEvent('memory_manager_opened', profile.id);
+    const desktop = isDesktopLayout();
+    setFocusedMemoryId(memoryId ?? null);
+    if (desktop) {
+      if (memoryId) window.setTimeout(() => document.getElementById(`desktop-memory-${memoryId}`)?.focus(), 0);
+      return;
+    }
+    setContextOpen(true);
   };
 
   const sendChatMessage = async (content: string, clientRequestId: string, showOptimisticMessage: boolean) => {
@@ -719,6 +589,7 @@ export default function CacheApp() {
 
   return (
     <main className="app-shell flex h-dvh min-h-dvh flex-col overflow-hidden">
+      {memoryStatus && <div className="fixed bottom-4 right-4 z-50 flex max-w-sm items-start gap-3 rounded-2xl border border-sage/20 bg-white px-4 py-3 text-sm text-ink shadow-lg" role="status" aria-live="polite"><span className="leading-relaxed">{memoryStatus}</span><button type="button" onClick={() => setMemoryStatus('')} className="mt-0.5 shrink-0 rounded text-ink/50 hover:text-ink" aria-label="Dismiss memory confirmation"><X className="size-4" /></button></div>}
       <header className="mx-auto flex w-full max-w-6xl shrink-0 items-center justify-between px-5 py-4 sm:px-6">
         <a href="/" className="font-serif text-2xl font-semibold">Cache<span className="text-terracotta">.</span></a>
         <div className="flex items-center gap-1 sm:gap-2">
@@ -727,19 +598,19 @@ export default function CacheApp() {
         </div>
       </header>
       <div className="mx-auto grid w-full min-h-0 max-w-6xl flex-1 gap-4 px-4 pb-4 sm:px-6 lg:grid-cols-[236px_minmax(0,1fr)] lg:gap-5 lg:pb-6">
-        {profile && <aside className="hidden min-h-0 overflow-y-auto rounded-[24px] border border-ink/10 bg-white/60 px-5 py-6 lg:block"><ContextPanel profile={profile} onEdit={() => setEditing(true)} editButtonRef={editButtonRef} /></aside>}
+        {profile && <aside className="hidden min-h-0 overflow-y-auto rounded-[24px] border border-ink/10 bg-white/60 px-5 py-6 lg:block"><ContextPanel profile={profile} memories={memories} memoryLimit={memoryLimit} memoriesLoading={memoriesLoading} memoriesError={memoriesError} focusedMemoryId={focusedMemoryId} memoryTargetRef={desktopMemoryTargetRef} instance="desktop" onEdit={() => setEditing(true)} onUpdateMemory={updateMemory} onDeleteMemory={deleteMemory} onRetryMemories={() => session && void loadMemories(session.access_token)} editButtonRef={editButtonRef} /></aside>}
         <section className="flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-ink/10 bg-white shadow-[0_12px_32px_-18px_rgba(43,38,34,0.2)]">
           <div className="shrink-0 border-b border-ink/10 px-5 pb-4 pt-5 sm:px-7 sm:pt-6">
             <p className="app-eyebrow">A calm place to think it through</p>
             <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
               <h1 className="font-serif text-2xl sm:text-3xl">{hasMessages ? `Chatting about ${profile?.nickname}` : `How can Cache help ${profile?.nickname ?? 'today'}?`}</h1>
-              {profile && <span className="text-sm text-ink/60">{ageLabel(profile)}</span>}
+              {profile && <span className="text-sm text-ink/60">{formatChildAge(profile.birth_month, profile.birth_year)}</span>}
             </div>
             <details className="mt-2 text-xs text-ink/60">
               <summary className="flex w-fit cursor-pointer items-center gap-1.5 font-medium transition hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta"><Info className="size-3.5" />Guidance details</summary>
               <p className="mt-2 max-w-xl leading-relaxed">Cache offers general parenting guidance, not medical, mental-health, or emergency care. If someone may be in immediate danger, Cache will pause normal coaching and direct you to urgent help.</p>
             </details>
-            {profile && <button type="button" onClick={() => setContextOpen(true)} className="mt-3 inline-flex items-center gap-2 rounded-full border border-sage/20 bg-sage/10 px-3 py-1.5 text-left text-xs font-semibold text-sage transition hover:bg-sage/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta lg:hidden">
+            {profile && <button type="button" onClick={() => openMemoryManager()} className="mt-3 inline-flex items-center gap-2 rounded-full border border-sage/20 bg-sage/10 px-3 py-1.5 text-left text-xs font-semibold text-sage transition hover:bg-sage/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta lg:hidden">
               <span className="size-1.5 rounded-full bg-sage" /><span>Saved context · {profile.nickname}</span><ChevronUp className="size-3.5" />
             </button>}
           </div>
@@ -753,7 +624,7 @@ export default function CacheApp() {
                 </div>
               </div>
             </div>}
-            {messages.map((message) => <div key={message.id}><ChatMessage message={message} />{message.role === 'assistant' && <><MemoryUseDisclosure memories={message.used_memories ?? []} /><MemorySuggestionCard suggestions={memorySuggestions[message.id] ?? []} onResolve={(suggestion, action, content) => void resolveMemorySuggestion(suggestion, action, content)} /></>}</div>)}
+            {messages.map((message) => <div key={message.id}><ChatMessage message={message} />{message.role === 'assistant' && <><MemoryUseDisclosure memories={message.used_memories ?? []} onManage={openMemoryManager} onOpened={() => recordProductEvent('memory_use_disclosure_opened', message.id)} /><MemorySuggestionCard suggestions={memorySuggestions[message.id] ?? []} memoryCount={memories.length} memoryLimit={memoryLimit} onManage={() => openMemoryManager()} onResolve={resolveMemorySuggestion} /></>}</div>)}
             {sending && <div className="flex w-fit items-center gap-2.5 rounded-2xl rounded-bl-md border border-sage/15 bg-sage/10 px-4 py-3 text-sm text-ink" role="status"><span className="grid size-7 place-items-center rounded-full bg-white/70 text-sage" aria-hidden="true"><Sparkles className="size-3.5" /></span><span>Cache is thinking<span className="chat-thinking-dots" aria-hidden="true"><i /><i /><i /></span></span><span className="sr-only">Cache is preparing a response</span></div>}
             <div ref={messagesEndRef} />
           </div>
@@ -769,10 +640,10 @@ export default function CacheApp() {
         </section>
       </div>
       {contextOpen && profile && <div className="fixed inset-0 z-30 lg:hidden">
-        <button type="button" onClick={closeContext} className="absolute inset-0 bg-ink/35" aria-label="Close saved context" />
+        <div onClick={closeContext} className="absolute inset-0 bg-ink/35" aria-hidden="true" />
         <section ref={contextDrawerRef} className="absolute inset-x-0 bottom-0 max-h-[85dvh] overflow-y-auto rounded-t-[28px] bg-cream p-6 pb-8 shadow-[0_-12px_32px_-12px_rgba(43,38,34,0.28)]" role="dialog" aria-modal="true" aria-label={`${profile.nickname}'s saved context`}>
           <button type="button" onClick={closeContext} className="absolute right-5 top-5 rounded-lg p-2 text-ink/60 hover:bg-ink/5 hover:text-ink" aria-label="Close saved context"><X className="size-5" /></button>
-          <div className="pr-10"><ContextPanel profile={profile} onEdit={() => { closeContext(); setEditing(true); }} editButtonRef={editButtonRef} /></div>
+          <div className="pr-10"><ContextPanel profile={profile} memories={memories} memoryLimit={memoryLimit} memoriesLoading={memoriesLoading} memoriesError={memoriesError} focusedMemoryId={focusedMemoryId} memoryTargetRef={mobileMemoryTargetRef} instance="mobile" onEdit={() => { closeContext(); setEditing(true); }} onUpdateMemory={updateMemory} onDeleteMemory={deleteMemory} onRetryMemories={() => session && void loadMemories(session.access_token)} editButtonRef={editButtonRef} /></div>
         </section>
       </div>}
       {editing && profile && <div className="fixed inset-0 z-40 grid place-items-center bg-ink/35 p-4" role="presentation"><section ref={editDialogRef} className="context-form-workspace flex max-h-[calc(100dvh-2rem)] w-full max-w-3xl flex-col" role="dialog" aria-modal="true" aria-labelledby="edit-context-title"><div className="flex shrink-0 items-start justify-between gap-5 border-b border-ink/10 px-5 py-5 sm:px-8 sm:py-6"><div><p className="app-eyebrow">Saved context</p><h2 id="edit-context-title" className="mt-2 font-serif text-3xl">Update {profile.nickname}’s context</h2><p className="mt-2 text-sm leading-relaxed text-ink/65">Keep the details that help Cache support your family up to date.</p></div><button ref={editCloseButtonRef} type="button" onClick={closeEditing} className="rounded-lg p-2 text-ink/60 transition hover:bg-ink/5 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta" aria-label="Close context editor"><X className="size-5" /></button></div><div className="min-h-0 overflow-y-auto px-5 py-6 sm:px-8 sm:py-8"><ProfileForm initialProfile={profile} onSave={(saved) => { setProfile(saved); closeEditing(); }} onCancel={closeEditing} /></div></section></div>}

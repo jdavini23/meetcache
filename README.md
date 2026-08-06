@@ -41,6 +41,8 @@ The test suite uses mocked Supabase and Gemini responses, so it does not require
 - Pending requests older than `CHAT_REQUEST_STALE_SECONDS` (90 seconds by
   default) can be reclaimed safely after an interrupted server request.
 - The chat endpoint verifies a Supabase access token, reads the caller's profile, and persists messages server-side. Database row-level security keeps browser access scoped to its owner.
+- Parents can review, edit, and remove up to 12 approved memories. Memory mutations stay server-side, and removing a memory prevents future reuse while preserving the content snapshot attached to earlier replies.
+- Privacy-safe product events record app-session and memory-control usage using event names and UUIDs only. They never include message or memory content and are included in account exports and deletion.
 - `GET /healthz` is the process liveness endpoint. `GET /readyz` also checks
   Supabase connectivity and returns `503` when Cache cannot safely serve chat.
 - Authenticated parents can download a versioned JSON export at
