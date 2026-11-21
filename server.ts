@@ -5,12 +5,12 @@ import path from 'node:path';
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai';
 import * as Sentry from '@sentry/node';
-import { formatChildAge } from './src/lib/childAge';
+import { formatChildAge } from './src/lib/childAge.js';
 import {
   classifySafetyConcern,
   hasUnsafeEmergencyDirective,
   urgentSafetyResponse,
-} from './src/lib/safety';
+} from './src/lib/safety.js';
 
 const required = (name: string) => {
   const value = process.env[name];
@@ -740,4 +740,4 @@ function startServer() {
   app.listen(port, () => logEvent('server_started', 'startup', { port }));
 }
 
-if (!process.env.VITEST) startServer();
+if (!process.env.VITEST && !process.env.VERCEL) startServer();
