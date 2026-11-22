@@ -68,6 +68,29 @@ describe('CacheApp', () => {
     expect(await screen.findByText('Check your email for a secure sign-in link.')).toBeInTheDocument();
   });
 
+  it('explains invite-only access when the email is not approved', async () => {
+    const user = userEvent.setup();
+    signInWithOtp.mockResolvedValue({ error: { status: 403, message: 'Cache is invite-only right now.' } });
+    render(<CacheApp />);
+
+    await user.type(await screen.findByPlaceholderText('you@example.com'), 'stranger@example.com');
+    await user.click(screen.getByRole('button', { name: /send sign-in link/i }));
+
+    expect(await screen.findByText(/cache is invite-only right now/i)).toBeInTheDocument();
+    expect(screen.queryByText('Check your email for a secure sign-in link.')).not.toBeInTheDocument();
+  });
+
+  it('keeps the generic error for other sign-in failures', async () => {
+    const user = userEvent.setup();
+    signInWithOtp.mockResolvedValue({ error: { status: 500, message: 'Internal error' } });
+    render(<CacheApp />);
+
+    await user.type(await screen.findByPlaceholderText('you@example.com'), 'parent@example.com');
+    await user.click(screen.getByRole('button', { name: /send sign-in link/i }));
+
+    expect(await screen.findByText(/could not send that sign-in link/i)).toBeInTheDocument();
+  });
+
   it('keeps invalid onboarding data in the form with an inline validation summary', async () => {
     getSession.mockResolvedValue({ data: { session: { access_token: 'token', user: { id: 'user-1' } } } });
     const profileQuery = { select: vi.fn(() => ({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) })) };
