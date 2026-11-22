@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
 import express from 'express';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai';
@@ -18,6 +18,14 @@ const required = (name: string) => {
   return value;
 };
 
+export type WaitlistAlertConfig = {
+  secret?: string;
+  resendApiKey?: string;
+  to?: string;
+  from?: string;
+  fetchImpl?: typeof fetch;
+};
+
 type AppDependencies = {
   // The application uses the service-role client dynamically across several tables.
   // Keep this boundary structural so tests can inject a lightweight fake client.
@@ -28,6 +36,7 @@ type AppDependencies = {
   rateLimitWindowSeconds?: number;
   dailyLimitMax?: number;
   staleRequestSeconds?: number;
+  waitlistAlert?: WaitlistAlertConfig;
 };
 
 type StoredMessage = {
@@ -188,6 +197,41 @@ function logEvent(event: string, requestId: string, details: Record<string, stri
   console.info(JSON.stringify({ event, requestId, ...details }));
 }
 
+function secretsMatch(provided: string | undefined, expected: string) {
+  if (!provided) return false;
+  const providedBuffer = Buffer.from(provided);
+  const expectedBuffer = Buffer.from(expected);
+  return providedBuffer.length === expectedBuffer.length && timingSafeEqual(providedBuffer, expectedBuffer);
+}
+
+function optionalText(value: unknown, maxLength: number) {
+  return typeof value === 'string' && value.trim() ? value.trim().slice(0, maxLength) : null;
+}
+
+export function waitlistAlertEmail(signup: {
+  email: string;
+  source: string | null;
+  utmSource: string | null;
+  utmMedium: string | null;
+  utmCampaign: string | null;
+  total: number | null;
+}) {
+  const campaign = [signup.utmSource, signup.utmMedium, signup.utmCampaign].filter(Boolean).join(' / ');
+  const lines = [
+    `New waitlist signup: ${signup.email}`,
+    '',
+    `Form: ${signup.source ?? 'unknown'}`,
+    `Campaign: ${campaign || 'none (direct or untagged link)'}`,
+  ];
+  if (signup.total !== null) lines.push(`Total signups: ${signup.total}`);
+  return {
+    subject: signup.total !== null
+      ? `Cache waitlist #${signup.total}: ${signup.email}`
+      : `Cache waitlist signup: ${signup.email}`,
+    text: lines.join('\n'),
+  };
+}
+
 function sendError(response: express.Response, status: number, error: string) {
   return response.status(status).json({ error, requestId: response.locals.requestId });
 }
@@ -232,6 +276,7 @@ export function createApp({
   rateLimitWindowSeconds = 60,
   dailyLimitMax = 100,
   staleRequestSeconds = 90,
+  waitlistAlert = {},
 }: AppDependencies) {
   const app = express();
   app.use((_request, response, next) => {
@@ -243,6 +288,53 @@ export function createApp({
   app.use(express.json({ limit: '20kb' }));
 
   app.get('/healthz', (_request, response) => response.status(200).json({ status: 'ok' }));
+
+  // Called by the Supabase waitlist trigger (pg_net) after each signup.
+  app.post('/api/webhooks/waitlist-signup', async (request, response) => {
+    const requestId = response.locals.requestId;
+    const { secret, resendApiKey, to, from = 'Cache <onboarding@resend.dev>', fetchImpl = fetch } = waitlistAlert;
+    if (!secret || !resendApiKey || !to) return sendError(response, 503, 'Waitlist alerts are not configured.');
+    if (!secretsMatch(request.header('x-waitlist-alert-secret'), secret)) return sendError(response, 401, 'Invalid webhook secret.');
+
+    const email = optionalText(request.body?.email, 320);
+    if (!email || !email.includes('@')) return sendError(response, 400, 'A signup email is required.');
+
+    let total: number | null = null;
+    try {
+      const { count, error } = await supabase.from('waitlist').select('id', { count: 'exact', head: true });
+      if (!error && typeof count === 'number') total = count;
+    } catch {
+      // The count is a nice-to-have; never block the alert on it.
+    }
+
+    const message = waitlistAlertEmail({
+      email,
+      source: optionalText(request.body?.source, 40),
+      utmSource: optionalText(request.body?.utm_source, 100),
+      utmMedium: optionalText(request.body?.utm_medium, 100),
+      utmCampaign: optionalText(request.body?.utm_campaign, 100),
+      total,
+    });
+
+    try {
+      const resendResponse = await fetchImpl('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resendApiKey}`,
+          'Content-Type': 'application/json',
+          'Idempotency-Key': `waitlist-signup-${email}`,
+        },
+        body: JSON.stringify({ from, to: [to], subject: message.subject, text: message.text }),
+      });
+      if (!resendResponse.ok) throw new Error(`Resend responded with ${resendResponse.status}`);
+      logEvent('waitlist_alert_sent', requestId);
+      return response.status(202).json({ status: 'sent' });
+    } catch (error) {
+      logEvent('waitlist_alert_failed', requestId);
+      Sentry.captureException(error, { tags: { event: 'waitlist_alert_failed' } });
+      return sendError(response, 502, 'Could not send the waitlist alert.');
+    }
+  });
 
   app.get('/readyz', async (_request, response) => {
     try {
@@ -728,6 +820,7 @@ function startServer() {
     rateLimitWindowSeconds,
     dailyLimitMax,
     staleRequestSeconds,
+    waitlistAlert: waitlistAlertFromEnv(),
   });
   const port = Number(process.env.PORT ?? 3000);
 
@@ -738,6 +831,15 @@ function startServer() {
   }
 
   app.listen(port, () => logEvent('server_started', 'startup', { port }));
+}
+
+export function waitlistAlertFromEnv(env: NodeJS.ProcessEnv = process.env): WaitlistAlertConfig {
+  return {
+    secret: env.WAITLIST_ALERT_SECRET || undefined,
+    resendApiKey: env.RESEND_API_KEY || undefined,
+    to: env.WAITLIST_ALERT_TO || undefined,
+    from: env.WAITLIST_ALERT_FROM || undefined,
+  };
 }
 
 if (!process.env.VITEST && !process.env.VERCEL) startServer();

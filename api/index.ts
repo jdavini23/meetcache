@@ -2,7 +2,7 @@
 // Env vars come from the Vercel project settings, not .env.local.
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai';
-import { createApp } from '../server.js';
+import { createApp, waitlistAlertFromEnv } from '../server.js';
 
 const required = (name: string) => {
   const value = process.env[name];
@@ -27,6 +27,7 @@ const app = createApp({
   rateLimitWindowSeconds: positiveInteger(process.env.CHAT_RATE_LIMIT_WINDOW_SECONDS, 60),
   dailyLimitMax: positiveInteger(process.env.CHAT_DAILY_LIMIT_MAX, 100),
   staleRequestSeconds: positiveInteger(process.env.CHAT_REQUEST_STALE_SECONDS, 90),
+  waitlistAlert: waitlistAlertFromEnv(),
 });
 
 export default app;
