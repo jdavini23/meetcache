@@ -24,7 +24,7 @@ export default function ProductExample() {
             See what remembering changes.
           </h2>
           <p className="font-sans text-base text-ink/80 leading-relaxed">
-            Ask about what is happening now. Cache can connect it to the useful context you chose to share before.
+            Ask about what is happening now. Cache can connect it to what you've told it before.
           </p>
         </motion.div>
 

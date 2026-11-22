@@ -50,7 +50,7 @@ export default function TrustSafety() {
             ))}
           </ul>
           <p className="mt-5 border-t border-sage/15 pt-4 text-xs leading-relaxed text-ink/60">
-            Cache provides general parenting guidance—not medical, mental-health, or emergency care.{' '}
+            Cache provides general parenting guidance and is not medical, mental-health, or emergency care.{' '}
             <a href="/privacy" className="font-semibold text-terracotta underline underline-offset-2 hover:opacity-80">
               Read the privacy details
             </a>
