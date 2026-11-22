@@ -15,7 +15,7 @@ export default function HowItWorks() {
     {
       number: "03",
       title: "Build on their history",
-      description: "Get a practical next step informed by the context you shared and what you have already tried."
+      description: "Get a practical next step built on what you've told Cache and what you've already tried."
     }
   ];
 

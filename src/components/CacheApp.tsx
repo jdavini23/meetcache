@@ -209,7 +209,7 @@ function ProfileForm({ initialProfile, onSave, onCancel }: ProfileFormProps) {
     const { data, error: saveError } = await request;
     setSaving(false);
     if (saveError || !data) {
-      setSaveError('We could not save this context. Your answers are still here—please try again.');
+      setSaveError('We could not save this context. Your answers are still here. Please try again.');
       return;
     }
     onSave(data as ChildProfile);
@@ -624,7 +624,7 @@ export default function CacheApp() {
     } catch (error) {
       setFailedChatRequest({ content, clientRequestId });
       const requestId = error instanceof ChatRequestError ? error.requestId : undefined;
-      setNotice(`${error instanceof Error ? error.message : 'Cache could not respond just now. Your message is still here—please try again.'}${requestId ? `\nReference: ${requestId}` : ''}`);
+      setNotice(`${error instanceof Error ? error.message : 'Cache could not respond just now. Your message is still here. Please try again.'}${requestId ? `\nReference: ${requestId}` : ''}`);
       return false;
     } finally { sendLock.current = false; setSending(false); }
   };
