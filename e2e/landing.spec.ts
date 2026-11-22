@@ -7,9 +7,9 @@ test('the landing page exposes the early-access signup flow', async ({ page }) =
   await expect(page.locator('#nav-cta-button')).toHaveText(/join the waitlist/i);
   await expect(page.getByPlaceholder('your@email.com').first()).toBeVisible();
   await expect(page.getByText(/quiet time skipped this week/i)).toBeVisible();
-  await expect(page.getByRole('heading', { name: "you shouldn't have to build your own parenting system inside a blank chat.", exact: true })).toBeVisible();
-  await expect(page.getByText('every new chat starts from zero. you retype their age, the bedtime routine, the thing that helped last Tuesday. Cache keeps the routines, temperament, patterns, and past attempts you choose to share, so each question picks up where the last one left off.', { exact: true })).toBeVisible();
-  await expect(page.getByText('general AI assistants are built to help with everything. Cache is built to remember your child.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: "You shouldn't have to build your own parenting system inside a blank chat.", exact: true })).toBeVisible();
+  await expect(page.getByText("Every new chat starts from zero. You retype their age, the bedtime routine, the thing that helped last Tuesday. Cache keeps the routines, temperament, patterns, and past attempts you save, so each question picks up where the last one left off.", { exact: true })).toBeVisible();
+  await expect(page.getByText("General AI assistants are built to help with everything. Cache is built to remember your child.", { exact: true })).toBeVisible();
   await expect(page.getByText('You should not have to build your own parenting system inside a blank chat.')).toHaveCount(0);
   await expect(page.getByText(/chatgpt, claude, and gemini/i)).toHaveCount(0);
   await expect(page.getByRole('heading', { name: /your context stays in your control/i })).toBeVisible();

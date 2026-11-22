@@ -16,7 +16,7 @@ export default function WaitlistForm({
   isDarkTheme = false,
   heading,
   buttonLabel = 'Get early access',
-  supportingCopy = "Share only your email. We'll use it for early-access and occasional research messages."
+  supportingCopy = "Share only your email. We'll use it for early access and the occasional question about what to build."
 }: WaitlistFormProps) {
   const [email, setEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -65,7 +65,7 @@ export default function WaitlistForm({
         } else {
           console.error('Database insertion error:', error);
           setStatus('error');
-          setErrorMessage('Something went wrong — please try again.');
+          setErrorMessage('Something went wrong. Please try again.');
         }
       } else {
         setStatus('success');
@@ -74,7 +74,7 @@ export default function WaitlistForm({
     } catch (err) {
       console.error('Unexpected error:', err);
       setStatus('error');
-      setErrorMessage('Something went wrong — please try again.');
+      setErrorMessage('Something went wrong. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -118,7 +118,7 @@ export default function WaitlistForm({
     { value: 'something_else', label: 'Something else' }
   ];
   const resolvedHeading = heading === undefined
-    ? (isDarkTheme ? null : 'Get early access')
+    ? (isDarkTheme ? null : 'Save your spot')
     : heading;
 
   return (
@@ -215,14 +215,14 @@ export default function WaitlistForm({
               </div>
               <div>
                 <h4 className="font-serif text-lg font-bold tracking-tight">
-                  {status === 'duplicate' ? "We have you down." : "You are on the list."}
+                  {status === 'duplicate' ? "We have you down." : "You're on the list."}
                 </h4>
                 <p className={`text-sm mt-1 leading-relaxed
                   ${isDarkTheme ? 'text-cream/80' : 'text-ink/80'}`}
                 >
                   {status === 'duplicate' 
-                    ? "You are already on our list. We will reach out soon." 
-                    : "We'll be in touch about early access and opportunities to share feedback."}
+                    ? "You're already on the list. We'll reach out soon." 
+                    : "We'll be in touch when spots open, and sometimes to ask for your feedback."}
                 </p>
               </div>
             </div>
@@ -281,7 +281,7 @@ export default function WaitlistForm({
               <Check className="h-5 w-5" />
             </div>
             <h4 className={`font-serif text-lg font-bold mb-1 ${isDarkTheme ? 'text-cream' : 'text-ink'}`}>
-              Thanks — that helps.
+              Thanks, that helps.
             </h4>
             <p className={`text-xs max-w-xs leading-relaxed
               ${isDarkTheme ? 'text-cream/70' : 'text-ink/70'}`}

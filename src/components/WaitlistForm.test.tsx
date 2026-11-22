@@ -74,7 +74,7 @@ describe('WaitlistForm', () => {
     await user.type(screen.getByPlaceholderText('your@email.com'), 'parent@example.com');
     await user.click(screen.getByRole('button', { name: /get early access/i }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Something went wrong');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Something went wrong. Please try again.');
   });
 
   it('disables the form and shows a saving state while submitting', async () => {
@@ -102,6 +102,6 @@ describe('WaitlistForm', () => {
     await user.click(screen.getByRole('button', { name: /get early access/i }));
     await user.click(await screen.findByRole('button', { name: /skip question/i }));
 
-    expect(await screen.findByText('Thanks — that helps.')).toBeInTheDocument();
+    expect(await screen.findByText('Thanks, that helps.')).toBeInTheDocument();
   });
 });
