@@ -9,6 +9,7 @@
     { "source": "/api/(.*)", "destination": "/api" },
     { "source": "/healthz", "destination": "/api" },
     { "source": "/readyz", "destination": "/api" },
+    { "source": "/privacy", "destination": "/index.html" },
     { "source": "/app", "destination": "/index.html" },
     { "source": "/app/(.*)", "destination": "/index.html" }
   ]
