@@ -1,7 +1,32 @@
 import { useState, FormEvent } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Check, ArrowRight, AlertCircle, Loader2 } from 'lucide-react';
+import * as Sentry from '@sentry/react';
 import { supabase } from '../lib/supabase';
+
+const UTM_KEYS = ['utm_source', 'utm_medium', 'utm_campaign'] as const;
+
+// Reads campaign tags from the landing URL so each signup can be attributed.
+export function readUtmParams(search: string) {
+  const params = new URLSearchParams(search);
+  const utm: Partial<Record<typeof UTM_KEYS[number], string>> = {};
+  for (const key of UTM_KEYS) {
+    const value = params.get(key)?.trim().slice(0, 100);
+    if (value) utm[key] = value;
+  }
+  return utm;
+}
+
+// Keeps only the referring origin and path; query strings can carry personal data.
+export function sanitizeReferrer(referrer: string) {
+  if (!referrer) return null;
+  try {
+    const url = new URL(referrer);
+    return `${url.origin}${url.pathname}`.slice(0, 2048);
+  } catch {
+    return null;
+  }
+}
 
 interface WaitlistFormProps {
   idPrefix: string;
@@ -19,6 +44,7 @@ export default function WaitlistForm({
   supportingCopy = "Share only your email. We'll use it for early access and the occasional question about what to build."
 }: WaitlistFormProps) {
   const [email, setEmail] = useState('');
+  const [honeypot, setHoneypot] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedEmail, setSubmittedEmail] = useState('');
   const [status, setStatus] = useState<'idle' | 'success' | 'duplicate' | 'error'>('idle');
@@ -43,19 +69,26 @@ export default function WaitlistForm({
       return;
     }
 
+    // Bots fill every field. Show them the normal success path without saving anything.
+    if (honeypot) {
+      setSubmittedEmail(cleanEmail);
+      setUseCaseSurveyStatus('done');
+      setStatus('success');
+      return;
+    }
+
     setIsSubmitting(true);
     setStatus('idle');
     setErrorMessage('');
 
     try {
-      const referrer = typeof document !== 'undefined' ? (document.referrer || null) : null;
-      
       const { error } = await supabase
         .from('waitlist')
         .insert({
           email: cleanEmail.toLowerCase(),
-          source: 'landing',
-          referrer: referrer
+          source: idPrefix,
+          referrer: sanitizeReferrer(document.referrer),
+          ...readUtmParams(window.location.search)
         });
 
       if (error) {
@@ -64,6 +97,9 @@ export default function WaitlistForm({
           setSubmittedEmail(cleanEmail);
         } else {
           console.error('Database insertion error:', error);
+          Sentry.captureException(new Error(`Waitlist insert failed: ${error.code ?? 'unknown'}`), {
+            tags: { event: 'waitlist_insert_failed', code: error.code ?? 'unknown' }
+          });
           setStatus('error');
           setErrorMessage('Something went wrong. Please try again.');
         }
@@ -73,6 +109,7 @@ export default function WaitlistForm({
       }
     } catch (err) {
       console.error('Unexpected error:', err);
+      Sentry.captureException(err, { tags: { event: 'waitlist_insert_failed' } });
       setStatus('error');
       setErrorMessage('Something went wrong. Please try again.');
     } finally {
@@ -142,6 +179,19 @@ export default function WaitlistForm({
               </label>
             )}
             <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-2.5">
+              {/* Honeypot: hidden from people and assistive tech; bots tend to fill it. */}
+              <div aria-hidden="true" className="absolute -left-[9999px] h-px w-px overflow-hidden">
+                <label htmlFor={`${idPrefix}-company-input`}>Company</label>
+                <input
+                  id={`${idPrefix}-company-input`}
+                  name="company"
+                  type="text"
+                  tabIndex={-1}
+                  autoComplete="off"
+                  value={honeypot}
+                  onChange={(e) => setHoneypot(e.target.value)}
+                />
+              </div>
               <div className="relative flex-1">
                 <input
                   id={`${idPrefix}-email-input`}
