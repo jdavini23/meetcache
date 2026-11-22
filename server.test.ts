@@ -2,6 +2,7 @@ import request from 'supertest';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createApp,
+  initServerSentry,
   isContextSummaryRequest,
   parseCoachingResponse,
   parseMemorySuggestions,
@@ -621,5 +622,11 @@ describe('POST /api/webhooks/waitlist-signup', () => {
     const { app } = alertApp({ fetchImpl: vi.fn().mockResolvedValue({ ok: false, status: 403 }) });
     const response = await request(app).post('/api/webhooks/waitlist-signup').set('x-waitlist-alert-secret', secret).send(signup);
     expect(response.status).toBe(502);
+  });
+});
+
+describe('initServerSentry', () => {
+  it('stays off when no DSN is configured', () => {
+    expect(initServerSentry({})).toBe(false);
   });
 });

@@ -778,6 +778,31 @@ export function createApp({
   return app;
 }
 
+// Shared by the local server and the Vercel function. Returns whether Sentry is on.
+export function initServerSentry(env: NodeJS.ProcessEnv = process.env) {
+  const dsn = env.SENTRY_DSN;
+  if (!dsn) return false;
+  Sentry.init({
+    dsn,
+    environment: env.SENTRY_ENVIRONMENT ?? env.VERCEL_ENV ?? env.NODE_ENV ?? 'development',
+    sendDefaultPii: false,
+    beforeSend(event) {
+      if (event.request) {
+        event.request.data = undefined;
+        event.request.headers = {};
+        event.request.cookies = undefined;
+      }
+      event.user = undefined;
+      return event;
+    },
+    beforeBreadcrumb(breadcrumb) {
+      if (breadcrumb.category === 'http') return null;
+      return breadcrumb;
+    },
+  });
+  return true;
+}
+
 function startServer() {
   dotenv.config();
   dotenv.config({ path: '.env.local', override: true });
@@ -789,27 +814,7 @@ function startServer() {
   const rateLimitWindowSeconds = positiveInteger(process.env.CHAT_RATE_LIMIT_WINDOW_SECONDS, 60);
   const dailyLimitMax = positiveInteger(process.env.CHAT_DAILY_LIMIT_MAX, 100);
   const staleRequestSeconds = positiveInteger(process.env.CHAT_REQUEST_STALE_SECONDS, 90);
-  const sentryDsn = process.env.SENTRY_DSN;
-  if (sentryDsn) {
-    Sentry.init({
-      dsn: sentryDsn,
-      environment: process.env.SENTRY_ENVIRONMENT ?? process.env.NODE_ENV ?? 'development',
-      sendDefaultPii: false,
-      beforeSend(event) {
-        if (event.request) {
-          event.request.data = undefined;
-          event.request.headers = {};
-          event.request.cookies = undefined;
-        }
-        event.user = undefined;
-        return event;
-      },
-      beforeBreadcrumb(breadcrumb) {
-        if (breadcrumb.category === 'http') return null;
-        return breadcrumb;
-      },
-    });
-  }
+  initServerSentry();
   const supabase = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
   const gemini = new GoogleGenAI({ apiKey: geminiApiKey });
   const app = createApp({
