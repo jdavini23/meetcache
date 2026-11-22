@@ -117,7 +117,7 @@ export default function Hero() {
           <WaitlistForm
             idPrefix="hero"
             heading="Get early access"
-            buttonLabel="Get early access"
+            buttonLabel="Join the waitlist"
             supportingCopy="Join the waitlist. We'll send invitations as spots open and occasional opportunities to help shape Cache."
           />
         </motion.div>

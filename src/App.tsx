@@ -1,9 +1,10 @@
 import Navbar from './components/Navbar';
 import Hero from './components/Hero';
 import ProductExample from './components/ProductExample';
+import HowItWorks from './components/HowItWorks';
 import GeneralAIComparison from './components/GeneralAIComparison';
 import TrustSafety from './components/TrustSafety';
-import HowItWorks from './components/HowItWorks';
+import FounderNote from './components/FounderNote';
 import FinalCTA from './components/FinalCTA';
 import Footer from './components/Footer';
 import CacheApp from './components/CacheApp';
@@ -36,9 +37,10 @@ export default function App() {
       <main className="flex-1">
         <Hero />
         <ProductExample />
+        <HowItWorks />
         <GeneralAIComparison />
         <TrustSafety />
-        <HowItWorks />
+        <FounderNote />
         <FinalCTA />
       </main>
 

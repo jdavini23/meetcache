@@ -25,7 +25,7 @@ export default function FinalCTA() {
               id="final-cta-heading"
               className="font-serif text-3xl sm:text-4xl md:text-5xl font-medium tracking-tight mb-4 leading-tight"
             >
-              Be among the first parents to try Cache<span className="text-terracotta">.</span>
+              Start with what you already know about your kid<span className="text-terracotta">.</span>
             </h2>
             
             {/* Paragraph */}
@@ -33,7 +33,7 @@ export default function FinalCTA() {
               id="final-cta-paragraph"
               className="font-sans text-sm sm:text-base text-cream/80 max-w-lg mb-10 leading-relaxed"
             >
-              Join the waitlist now. We'll invite parents as spots open and ask what would make Cache most useful for everyday family life.
+              Join the waitlist and we'll invite parents as spots open. We'll also ask what would make Cache most useful for your family.
             </p>
 
             {/* Email form container */}
@@ -44,7 +44,7 @@ export default function FinalCTA() {
               <WaitlistForm
                 idPrefix="cta"
                 isDarkTheme={true}
-                buttonLabel="Get early access"
+                buttonLabel="Join the waitlist"
                 supportingCopy="Email only. We'll use it for early-access invitations and occasional research messages."
               />
             </div>

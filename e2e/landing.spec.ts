@@ -4,7 +4,7 @@ test('the landing page exposes the early-access signup flow', async ({ page }) =
   await page.goto('/');
 
   await expect(page.getByRole('heading', { name: /parenting guidance that remembers what works for your child/i })).toBeVisible();
-  await expect(page.locator('#nav-cta-button')).toHaveText(/get early access/i);
+  await expect(page.locator('#nav-cta-button')).toHaveText(/join the waitlist/i);
   await expect(page.getByPlaceholder('your@email.com').first()).toBeVisible();
   await expect(page.getByText(/quiet time skipped this week/i)).toBeVisible();
   await expect(page.getByRole('heading', { name: "you shouldn't have to build your own parenting system inside a blank chat.", exact: true })).toBeVisible();
@@ -23,7 +23,7 @@ test('the waitlist signup reaches the survey with a mocked Supabase response', a
 
   const form = page.getByPlaceholder('your@email.com').first().locator('xpath=ancestor::form');
   await form.getByPlaceholder('your@email.com').fill('parent@example.com');
-  await form.getByRole('button', { name: /get early access/i }).click();
+  await form.getByRole('button', { name: /join the waitlist/i }).click();
 
   await expect(page.getByText(/what would you want cache's help with first/i)).toBeVisible();
 });
