@@ -546,3 +546,80 @@ describe('launch-readiness endpoints', () => {
     expect(deleteUser).toHaveBeenCalledWith('user-1');
   });
 });
+
+describe('POST /api/webhooks/waitlist-signup', () => {
+  const secret = 'test-alert-secret';
+  const signup = { email: 'parent@example.com', source: 'hero', utm_source: 'threads', utm_medium: null, utm_campaign: 'carousel-1' };
+
+  function alertApp({ count = 7, fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200 }), config = {} } = {}) {
+    const select = vi.fn().mockResolvedValue({ count, error: null });
+    const from = vi.fn(() => ({ select }));
+    const app = createApp({
+      supabase: { from },
+      gemini: {},
+      geminiModel: 'test-model',
+      waitlistAlert: { secret, resendApiKey: 're_test', to: 'founder@example.com', fetchImpl, ...config },
+    } as never);
+    return { app, fetchImpl, from };
+  }
+
+  it('returns 503 when alerts are not configured', async () => {
+    const app = createApp({ supabase: {}, gemini: {}, geminiModel: 'test-model' } as never);
+    const response = await request(app).post('/api/webhooks/waitlist-signup').send(signup);
+    expect(response.status).toBe(503);
+  });
+
+  it('rejects a missing or wrong secret without calling Resend', async () => {
+    const { app, fetchImpl } = alertApp();
+    const missing = await request(app).post('/api/webhooks/waitlist-signup').send(signup);
+    const wrong = await request(app).post('/api/webhooks/waitlist-signup').set('x-waitlist-alert-secret', 'nope').send(signup);
+    expect(missing.status).toBe(401);
+    expect(wrong.status).toBe(401);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('rejects a payload without an email', async () => {
+    const { app, fetchImpl } = alertApp();
+    const response = await request(app).post('/api/webhooks/waitlist-signup').set('x-waitlist-alert-secret', secret).send({ source: 'hero' });
+    expect(response.status).toBe(400);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('emails the founder with the signup, attribution, and running total', async () => {
+    const { app, fetchImpl, from } = alertApp();
+    const response = await request(app).post('/api/webhooks/waitlist-signup').set('x-waitlist-alert-secret', secret).send(signup);
+
+    expect(response.status).toBe(202);
+    expect(from).toHaveBeenCalledWith('waitlist');
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toBe('https://api.resend.com/emails');
+    expect(init.headers).toMatchObject({ Authorization: 'Bearer re_test', 'Idempotency-Key': 'waitlist-signup-parent@example.com' });
+    const body = JSON.parse(init.body);
+    expect(body).toMatchObject({ from: 'Cache <onboarding@resend.dev>', to: ['founder@example.com'], subject: 'Cache waitlist #7: parent@example.com' });
+    expect(body.text).toContain('Form: hero');
+    expect(body.text).toContain('Campaign: threads / carousel-1');
+    expect(body.text).toContain('Total signups: 7');
+  });
+
+  it('still sends the alert when the signup count is unavailable', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    const app = createApp({
+      supabase: { from: vi.fn(() => ({ select: vi.fn().mockRejectedValue(new Error('offline')) })) },
+      gemini: {},
+      geminiModel: 'test-model',
+      waitlistAlert: { secret, resendApiKey: 're_test', to: 'founder@example.com', fetchImpl },
+    } as never);
+    const response = await request(app).post('/api/webhooks/waitlist-signup').set('x-waitlist-alert-secret', secret).send({ email: 'parent@example.com' });
+
+    expect(response.status).toBe(202);
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(body.subject).toBe('Cache waitlist signup: parent@example.com');
+    expect(body.text).toContain('Campaign: none (direct or untagged link)');
+  });
+
+  it('returns 502 when Resend rejects the email', async () => {
+    const { app } = alertApp({ fetchImpl: vi.fn().mockResolvedValue({ ok: false, status: 403 }) });
+    const response = await request(app).post('/api/webhooks/waitlist-signup').set('x-waitlist-alert-secret', secret).send(signup);
+    expect(response.status).toBe(502);
+  });
+});
