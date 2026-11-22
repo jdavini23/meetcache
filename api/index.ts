@@ -2,7 +2,12 @@
 // Env vars come from the Vercel project settings, not .env.local.
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai';
-import { createApp, waitlistAlertFromEnv } from '../server.js';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import * as Sentry from '@sentry/node';
+import { createApp, initServerSentry, waitlistAlertFromEnv } from '../server.js';
+
+// Initialize before the rest of the app is built.
+const sentryEnabled = initServerSentry();
 
 const required = (name: string) => {
   const value = process.env[name];
@@ -30,4 +35,15 @@ const app = createApp({
   waitlistAlert: waitlistAlertFromEnv(),
 });
 
-export default app;
+// Serverless instances can freeze as soon as the response ends, dropping queued
+// Sentry events. Flush them before the response is finished.
+export default function handler(request: IncomingMessage, response: ServerResponse) {
+  if (sentryEnabled) {
+    const end = response.end.bind(response) as (...args: unknown[]) => ServerResponse;
+    response.end = ((...args: unknown[]) => {
+      Sentry.flush(2000).catch(() => undefined).finally(() => end(...args));
+      return response;
+    }) as ServerResponse['end'];
+  }
+  return app(request as never, response as never);
+}
