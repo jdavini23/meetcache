@@ -358,6 +358,11 @@ function MemoryUseDisclosure({ memories }: { memories: UsedMemory[] }) {
   </details>;
 }
 
+// The Supabase "Before User Created" hook rejects emails that are not approved on the waitlist.
+export function isInviteOnlyError(error: { status?: number; message?: string }) {
+  return error.status === 403 || /invite-only/i.test(error.message ?? '');
+}
+
 export default function CacheApp() {
   const [appState, setAppState] = useState<AppState>('loading');
   const [session, setSession] = useState<Session | null>(null);
@@ -496,7 +501,9 @@ export default function CacheApp() {
   const requestMagicLink = async (event: FormEvent) => {
     event.preventDefault(); setNotice('');
     const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { emailRedirectTo: `${window.location.origin}/app` } });
-    setNotice(error ? 'We could not send that sign-in link. Please check the address and try again.' : 'Check your email for a secure sign-in link.');
+    if (!error) setNotice('Check your email for a secure sign-in link.');
+    else if (isInviteOnlyError(error)) setNotice("Cache is invite-only right now. If you're on the waitlist, we'll email you when your spot opens. Not on it yet? Join at meetcache.com.");
+    else setNotice('We could not send that sign-in link. Please check the address and try again.');
   };
 
   const completeProfile = async (savedProfile: ChildProfile) => {
