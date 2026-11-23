@@ -34,6 +34,7 @@ interface WaitlistFormProps {
   heading?: string | null;
   buttonLabel?: string;
   supportingCopy?: string;
+  initialEmail?: string;
 }
 
 export default function WaitlistForm({
@@ -41,9 +42,10 @@ export default function WaitlistForm({
   isDarkTheme = false,
   heading,
   buttonLabel = 'Get early access',
-  supportingCopy = "Share only your email. We'll use it for early access and the occasional question about what to build."
+  supportingCopy = "Share only your email. We'll use it for early access and the occasional question about what to build.",
+  initialEmail = ''
 }: WaitlistFormProps) {
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(initialEmail);
   const [honeypot, setHoneypot] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedEmail, setSubmittedEmail] = useState('');

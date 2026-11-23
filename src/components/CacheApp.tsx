@@ -1,11 +1,12 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode, RefObject } from 'react';
-import { AlertCircle, ArrowRight, ChevronDown, ChevronUp, Info, Loader2, LogOut, Pencil, Send, ShieldCheck, Sparkles, X } from 'lucide-react';
+import { AlertCircle, ArrowRight, ChevronDown, ChevronUp, Info, Loader2, Lock, LogOut, Mail, Pencil, Send, ShieldCheck, Sparkles, X } from 'lucide-react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { formatChildAge, isChildAgeSupported } from '../lib/childAge';
 import type { ChildProfile, Conversation, MemorySuggestion, Message, UsedMemory } from '../lib/types';
 import ChatMarkdown from './ChatMarkdown';
+import WaitlistForm from './WaitlistForm';
 
 type AppState = 'loading' | 'signed-out' | 'onboarding' | 'ready' | 'error';
 
@@ -372,6 +373,7 @@ export default function CacheApp() {
   const [memorySuggestions, setMemorySuggestions] = useState<Record<string, MemorySuggestion[]>>({});
   const [email, setEmail] = useState('');
   const [notice, setNotice] = useState('');
+  const [signInResult, setSignInResult] = useState<'idle' | 'sending' | 'sent' | 'invite-only' | 'error'>('idle');
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -499,11 +501,10 @@ export default function CacheApp() {
   useModalFocus(editing, editDialogRef, closeEditing, editCloseButtonRef, editButtonRef);
 
   const requestMagicLink = async (event: FormEvent) => {
-    event.preventDefault(); setNotice('');
+    event.preventDefault(); setNotice(''); setSignInResult('sending');
     const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { emailRedirectTo: `${window.location.origin}/app` } });
-    if (!error) setNotice('Check your email for a secure sign-in link.');
-    else if (isInviteOnlyError(error)) setNotice("Cache is invite-only right now. If you're on the waitlist, we'll email you when your spot opens. Not on it yet? Join at meetcache.com.");
-    else setNotice('We could not send that sign-in link. Please check the address and try again.');
+    if (!error) setSignInResult('sent');
+    else setSignInResult(isInviteOnlyError(error) ? 'invite-only' : 'error');
   };
 
   const completeProfile = async (savedProfile: ChildProfile) => {
@@ -720,7 +721,37 @@ export default function CacheApp() {
   const hasMessages = messages.length > 0;
 
   if (appState === 'loading') return <main className="app-shell grid place-items-center"><Loader2 className="size-6 animate-spin text-terracotta" /></main>;
-  if (appState === 'signed-out') return <main className="app-shell"><section className="app-card max-w-lg mx-auto mt-12 md:mt-24"><p className="app-eyebrow">Cache for parents</p><h1 className="font-serif text-4xl mt-3">Guidance that begins with the context.</h1><p className="mt-4 text-ink/70 leading-relaxed">Sign in with an email link to build your child’s profile and talk things through without starting over.</p><form onSubmit={requestMagicLink} className="mt-8 flex flex-col sm:flex-row gap-3"><label className="sr-only" htmlFor="app-email">Email address</label><input id="app-email" className="app-input flex-1" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" required /><button className="app-button">Send sign-in link <ArrowRight className="size-4" /></button></form>{notice && <p role="status" className="mt-4 text-sm text-sage font-medium">{notice}</p>}<a href="/" className="inline-block mt-7 text-sm underline text-ink/60 hover:text-ink">Back to Cache</a></section></main>;
+  if (appState === 'signed-out') return (
+    <main className="app-shell px-4 pb-12">
+      <section className="app-card max-w-lg mx-auto mt-12 md:mt-24">
+        <p className="app-eyebrow">Cache for parents</p>
+        <h1 className="font-serif text-4xl mt-3">Guidance that begins with the context.</h1>
+        <p className="mt-4 text-ink/70 leading-relaxed">Sign in with an email link to build your child’s profile and talk things through without starting over.</p>
+        {signInResult === 'invite-only' ? (
+          <div role="alert" className="mt-8 rounded-2xl border border-terracotta/25 bg-terracotta/5 p-5 sm:p-6">
+            <div className="flex items-start gap-3">
+              <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-terracotta/10 text-terracotta" aria-hidden="true"><Lock className="size-5" /></span>
+              <div>
+                <h2 className="font-serif text-2xl leading-tight">Cache is invite-only for now</h2>
+                <p className="mt-2 text-sm leading-relaxed text-ink/75"><span className="font-semibold text-ink">{email.trim()}</span> isn’t approved yet. We’re letting parents in a few at a time from the waitlist.</p>
+              </div>
+            </div>
+            <div className="mt-5">
+              <WaitlistForm idPrefix="app-gate" heading={null} buttonLabel="Join the waitlist" initialEmail={email.trim()} supportingCopy="Already on the list? You’re all set. We’ll email you as soon as your spot opens." />
+            </div>
+            <button type="button" onClick={() => setSignInResult('idle')} className="mt-4 text-sm font-medium text-ink/60 underline underline-offset-2 hover:text-ink">Try a different email</button>
+          </div>
+        ) : (
+          <>
+            <form onSubmit={requestMagicLink} className="mt-8 flex flex-col sm:flex-row gap-3"><label className="sr-only" htmlFor="app-email">Email address</label><input id="app-email" className="app-input flex-1" type="email" value={email} onChange={(event) => { setEmail(event.target.value); if (signInResult === 'error') setSignInResult('idle'); }} placeholder="you@example.com" required /><button className="app-button" disabled={signInResult === 'sending'}>{signInResult === 'sending' ? <><Loader2 className="size-4 animate-spin" /> Sending…</> : <>Send sign-in link <ArrowRight className="size-4" /></>}</button></form>
+            {signInResult === 'sent' && <div role="status" className="mt-4 flex items-start gap-3 rounded-2xl border border-sage/25 bg-sage/10 p-4"><Mail className="mt-0.5 size-5 shrink-0 text-sage" aria-hidden="true" /><div><p className="font-semibold text-ink">Check your email for a secure sign-in link.</p><p className="mt-1 text-sm text-ink/70">It was sent to {email.trim()}. It can take a minute, so check spam too.</p></div></div>}
+            {signInResult === 'error' && <div role="alert" className="mt-4 flex items-start gap-3 rounded-2xl border border-red-700/15 bg-red-50 p-4 text-sm text-red-800"><AlertCircle className="mt-0.5 size-5 shrink-0" aria-hidden="true" /><p>We could not send that sign-in link. Please check the address and try again.</p></div>}
+          </>
+        )}
+        <a href="/" className="inline-block mt-7 text-sm underline text-ink/60 hover:text-ink">Back to Cache</a>
+      </section>
+    </main>
+  );
   if (appState === 'onboarding') return <main className="app-shell min-h-dvh overflow-y-auto px-4 py-6 sm:px-6 sm:py-10"><section className="context-form-workspace mx-auto max-w-3xl"><div className="border-b border-ink/10 px-5 py-6 sm:px-8 sm:py-8"><p className="app-eyebrow">A little context</p><h1 className="mt-3 max-w-xl font-serif text-4xl sm:text-5xl">Tell Cache about your child.</h1><p className="mt-3 max-w-2xl text-sm leading-relaxed text-ink/70 sm:text-base">This takes just a few minutes and helps Cache offer practical, relevant ideas from your very first conversation.</p></div><div className="px-5 py-6 sm:px-8 sm:py-8"><ProfileForm onSave={completeProfile} /></div></section></main>;
   if (appState === 'error') return <main className="app-shell"><section className="app-card max-w-lg mx-auto mt-20"><AlertCircle className="size-7 text-terracotta" /><h1 className="font-serif text-3xl mt-4">Something needs another try.</h1><p className="mt-3 text-ink/70">{notice}</p><button className="app-button mt-6" onClick={() => session && void loadAccount(session)}>Reload Cache</button></section></main>;
 
