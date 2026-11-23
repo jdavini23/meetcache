@@ -68,16 +68,27 @@ describe('CacheApp', () => {
     expect(await screen.findByText('Check your email for a secure sign-in link.')).toBeInTheDocument();
   });
 
-  it('explains invite-only access when the email is not approved', async () => {
+  it('shows an invite-only panel with a prefilled waitlist form when the email is not approved', async () => {
     const user = userEvent.setup();
     signInWithOtp.mockResolvedValue({ error: { status: 403, message: 'Cache is invite-only right now.' } });
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    from.mockReturnValue({ insert });
     render(<CacheApp />);
 
     await user.type(await screen.findByPlaceholderText('you@example.com'), 'stranger@example.com');
     await user.click(screen.getByRole('button', { name: /send sign-in link/i }));
 
-    expect(await screen.findByText(/cache is invite-only right now/i)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /cache is invite-only for now/i })).toBeInTheDocument();
     expect(screen.queryByText('Check your email for a secure sign-in link.')).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('your@email.com')).toHaveValue('stranger@example.com');
+
+    await user.click(screen.getByRole('button', { name: /join the waitlist/i }));
+    expect(from).toHaveBeenCalledWith('waitlist');
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({ email: 'stranger@example.com', source: 'app-gate' }));
+
+    await user.click(await screen.findByRole('button', { name: /skip question/i }));
+    await user.click(screen.getByRole('button', { name: /try a different email/i }));
+    expect(screen.getByRole('button', { name: /send sign-in link/i })).toBeInTheDocument();
   });
 
   it('keeps the generic error for other sign-in failures', async () => {
