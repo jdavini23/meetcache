@@ -630,3 +630,36 @@ describe('initServerSentry', () => {
     expect(initServerSentry({})).toBe(false);
   });
 });
+
+describe('PATCH /api/memory-suggestions/:id', () => {
+  const suggestionId = '3f6c2a1e-8b4d-4c7a-9e2f-1a2b3c4d5e6f';
+
+  function memoryApp(rpcResult: { data: unknown; error: { message: string } | null }) {
+    const getUser = vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null });
+    const rpc = vi.fn().mockResolvedValue(rpcResult);
+    const app = createApp({ supabase: { auth: { getUser }, rpc }, gemini: {}, geminiModel: 'test-model' } as never);
+    return { app, rpc };
+  }
+
+  it('explains the 12-memory limit enforced by the database', async () => {
+    const { app } = memoryApp({ data: null, error: { message: 'memory_limit_reached' } });
+    const response = await request(app)
+      .patch(`/api/memory-suggestions/${suggestionId}`)
+      .set('authorization', 'Bearer token')
+      .send({ action: 'accept' });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe('This child already has 12 saved memories. Remove one before saving another.');
+  });
+
+  it('keeps the unavailable message for suggestions that were already resolved', async () => {
+    const { app } = memoryApp({ data: null, error: { message: 'Memory suggestion has already been resolved' } });
+    const response = await request(app)
+      .patch(`/api/memory-suggestions/${suggestionId}`)
+      .set('authorization', 'Bearer token')
+      .send({ action: 'accept' });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe('That memory suggestion is no longer available.');
+  });
+});

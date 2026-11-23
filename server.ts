@@ -505,6 +505,7 @@ export function createApp({
         p_action: action,
         p_content: action === 'accept' ? content : null,
       });
+      if (error?.message?.includes('memory_limit_reached')) return sendError(response, 409, 'This child already has 12 saved memories. Remove one before saving another.');
       if (error) return sendError(response, error.message.includes('not found') ? 404 : 409, 'That memory suggestion is no longer available.');
       return response.status(200).json({ result: data });
     } catch (error) {
