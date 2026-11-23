@@ -371,7 +371,10 @@ export default function CacheApp() {
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [memorySuggestions, setMemorySuggestions] = useState<Record<string, MemorySuggestion[]>>({});
-  const [email, setEmail] = useState('');
+  // Invite emails link to /app?email=... so the sign-in field is already filled in.
+  const [email, setEmail] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get('email')?.trim().slice(0, 320) ?? ''; } catch { return ''; }
+  });
   const [notice, setNotice] = useState('');
   const [signInResult, setSignInResult] = useState<'idle' | 'sending' | 'sent' | 'invite-only' | 'error'>('idle');
   const [draft, setDraft] = useState('');
