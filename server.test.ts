@@ -9,6 +9,8 @@ import {
   isSimpleGreeting,
   isStalePendingRequest,
   isUrgentSafetyConcern,
+  waitlistAlertFromEnv,
+  waitlistInviteEmail,
 } from './server';
 
 const dependencies = (getUser = vi.fn()) => ({
@@ -661,5 +663,96 @@ describe('PATCH /api/memory-suggestions/:id', () => {
 
     expect(response.status).toBe(409);
     expect(response.body.error).toBe('That memory suggestion is no longer available.');
+  });
+});
+
+describe('POST /api/webhooks/waitlist-approved', () => {
+  const secret = 'test-alert-secret';
+
+  function inviteApp({ fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200 }), updateError = null as Error | null, config = {} } = {}) {
+    const eq = vi.fn().mockResolvedValue({ error: updateError });
+    const update = vi.fn(() => ({ eq }));
+    const from = vi.fn(() => ({ update }));
+    const app = createApp({
+      supabase: { from },
+      gemini: {},
+      geminiModel: 'test-model',
+      waitlistAlert: { secret, resendApiKey: 're_test', fetchImpl, ...config },
+    } as never);
+    return { app, fetchImpl, from, update, eq };
+  }
+
+  it('returns 503 when invites are not configured', async () => {
+    const app = createApp({ supabase: {}, gemini: {}, geminiModel: 'test-model' } as never);
+    const response = await request(app).post('/api/webhooks/waitlist-approved').send({ email: 'parent@example.com' });
+    expect(response.status).toBe(503);
+  });
+
+  it('rejects a wrong secret without sending anything', async () => {
+    const { app, fetchImpl } = inviteApp();
+    const response = await request(app).post('/api/webhooks/waitlist-approved').set('x-waitlist-alert-secret', 'nope').send({ email: 'parent@example.com' });
+    expect(response.status).toBe(401);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('rejects a payload without an email', async () => {
+    const { app, fetchImpl } = inviteApp();
+    const response = await request(app).post('/api/webhooks/waitlist-approved').set('x-waitlist-alert-secret', secret).send({});
+    expect(response.status).toBe(400);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('emails the approved parent an invite and records when it was sent', async () => {
+    const { app, fetchImpl, from, update, eq } = inviteApp({ config: { inviteReplyTo: 'founder@example.com' } });
+    const response = await request(app).post('/api/webhooks/waitlist-approved').set('x-waitlist-alert-secret', secret).send({ email: 'Parent@Example.com' });
+
+    expect(response.status).toBe(202);
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toBe('https://api.resend.com/emails');
+    expect(init.headers).toMatchObject({ Authorization: 'Bearer re_test', 'Idempotency-Key': 'waitlist-invite-parent@example.com' });
+    const body = JSON.parse(init.body);
+    expect(body).toMatchObject({ from: 'Cache <hello@meetcache.com>', to: ['parent@example.com'], reply_to: 'founder@example.com' });
+    expect(body.subject).toMatch(/your cache invite is ready/i);
+    expect(body.text).toContain('https://www.meetcache.com/app?email=parent%40example.com');
+    expect(body.html).toContain('href="https://www.meetcache.com/app?email=parent%40example.com"');
+    expect(from).toHaveBeenCalledWith('waitlist');
+    expect(update).toHaveBeenCalledWith({ invite_sent_at: expect.any(String) });
+    expect(eq).toHaveBeenCalledWith('email', 'parent@example.com');
+  });
+
+  it('omits reply_to when none is configured', async () => {
+    const { app, fetchImpl } = inviteApp();
+    await request(app).post('/api/webhooks/waitlist-approved').set('x-waitlist-alert-secret', secret).send({ email: 'parent@example.com' });
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).not.toHaveProperty('reply_to');
+  });
+
+  it('still reports success when the invite is sent but recording it fails', async () => {
+    const { app } = inviteApp({ updateError: new Error('offline') });
+    const response = await request(app).post('/api/webhooks/waitlist-approved').set('x-waitlist-alert-secret', secret).send({ email: 'parent@example.com' });
+    expect(response.status).toBe(202);
+  });
+
+  it('returns 502 and records nothing when Resend rejects the invite', async () => {
+    const { app, update } = inviteApp({ fetchImpl: vi.fn().mockResolvedValue({ ok: false, status: 422 }) });
+    const response = await request(app).post('/api/webhooks/waitlist-approved').set('x-waitlist-alert-secret', secret).send({ email: 'parent@example.com' });
+    expect(response.status).toBe(502);
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe('waitlistInviteEmail', () => {
+  it('escapes the email in HTML and respects a custom app URL', () => {
+    const message = waitlistInviteEmail('a<b>@example.com', 'https://staging.example.com/');
+    expect(message.signInUrl).toBe('https://staging.example.com/app?email=a%3Cb%3E%40example.com');
+    expect(message.html).toContain('a&lt;b&gt;@example.com');
+    expect(message.html).not.toContain('a<b>@example.com');
+  });
+
+  it('reads invite settings from the environment', () => {
+    expect(waitlistAlertFromEnv({ WAITLIST_INVITE_FROM: 'X <x@y.co>', WAITLIST_INVITE_REPLY_TO: 'r@y.co', APP_URL: 'https://a.co' })).toMatchObject({
+      inviteFrom: 'X <x@y.co>',
+      inviteReplyTo: 'r@y.co',
+      appUrl: 'https://a.co',
+    });
   });
 });

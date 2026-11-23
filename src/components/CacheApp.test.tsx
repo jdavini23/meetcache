@@ -56,6 +56,13 @@ describe('CacheApp', () => {
     vi.unstubAllGlobals();
   });
 
+  it('prefills the sign-in email from an invite link', async () => {
+    window.history.replaceState(null, '', '/app?email=invited%40example.com');
+    render(<CacheApp />);
+    expect(await screen.findByPlaceholderText('you@example.com')).toHaveValue('invited@example.com');
+    window.history.replaceState(null, '', '/');
+  });
+
   it('requests a magic link from the signed-out app', async () => {
     const user = userEvent.setup();
     signInWithOtp.mockResolvedValue({ error: null });

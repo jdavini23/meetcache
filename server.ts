@@ -23,6 +23,9 @@ export type WaitlistAlertConfig = {
   resendApiKey?: string;
   to?: string;
   from?: string;
+  inviteFrom?: string;
+  inviteReplyTo?: string;
+  appUrl?: string;
   fetchImpl?: typeof fetch;
 };
 
@@ -232,6 +235,48 @@ export function waitlistAlertEmail(signup: {
   };
 }
 
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character] as string));
+}
+
+export function waitlistInviteEmail(email: string, appUrl: string) {
+  const signInUrl = `${appUrl.replace(/\/$/, '')}/app?email=${encodeURIComponent(email)}`;
+  const subject = 'You’re in: your Cache invite is ready';
+  const text = [
+    'Your spot on Cache is ready.',
+    '',
+    'Cache is parenting guidance that remembers what works for your child: their routines, temperament, and what you have already tried, so you never start from a blank chat.',
+    '',
+    `Sign in with this email address (${email}) and we will send you a secure link:`,
+    signInUrl,
+    '',
+    'Cache offers general parenting guidance and is not medical, mental-health, or emergency care.',
+    '',
+    'Thanks for waiting,',
+    'Joe, founder of Cache',
+  ].join('\n');
+  const safeEmail = escapeHtml(email);
+  const safeUrl = escapeHtml(signInUrl);
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta http-equiv="X-UA-Compatible" content="IE=edge"><title>${subject}</title></head>
+<body style="margin:0;padding:0;background-color:#faf6f0;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#faf6f0" style="background-color:#faf6f0;"><tr><td align="center" style="padding-top:32px;padding-bottom:32px;padding-left:16px;padding-right:16px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;"><tr><td bgcolor="#ffffff" style="background-color:#ffffff;border:1px solid #e9e4dd;border-radius:24px;padding-top:36px;padding-bottom:36px;padding-left:32px;padding-right:32px;">
+<p style="margin:0;font-family:Georgia,'Times New Roman',serif;font-size:22px;line-height:28px;color:#2b2622;font-weight:bold;">cache<span style="color:#c9603f;">.</span></p>
+<p style="margin-top:28px;margin-bottom:0;font-family:Georgia,'Times New Roman',serif;font-size:28px;line-height:34px;color:#2b2622;">Your spot is ready.</p>
+<p style="margin-top:16px;margin-bottom:0;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:24px;color:#4a443f;">Cache is parenting guidance that remembers what works for your child: their routines, temperament, and what you’ve already tried, so you never start from a blank chat.</p>
+<p style="margin-top:16px;margin-bottom:0;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:24px;color:#4a443f;">Sign in with <strong style="color:#2b2622;">${safeEmail}</strong> and we’ll send you a secure link.</p>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:28px;"><tr><td bgcolor="#c9603f" style="background-color:#c9603f;border-radius:12px;">
+<a href="${safeUrl}" style="display:inline-block;padding-top:14px;padding-bottom:14px;padding-left:24px;padding-right:24px;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:20px;color:#ffffff;font-weight:bold;text-decoration:none;">Open Cache</a>
+</td></tr></table>
+<p style="margin-top:28px;margin-bottom:0;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:24px;color:#4a443f;">Thanks for waiting,<br>Joe, founder of Cache</p>
+<p style="margin-top:28px;margin-bottom:0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:18px;color:#8a837c;">Cache offers general parenting guidance and is not medical, mental-health, or emergency care.</p>
+</td></tr></table>
+</td></tr></table>
+</body></html>`;
+  return { subject, text, html, signInUrl };
+}
+
 function sendError(response: express.Response, status: number, error: string) {
   return response.status(status).json({ error, requestId: response.locals.requestId });
 }
@@ -334,6 +379,59 @@ export function createApp({
       Sentry.captureException(error, { tags: { event: 'waitlist_alert_failed' } });
       return sendError(response, 502, 'Could not send the waitlist alert.');
     }
+  });
+
+  // Called by the Supabase waitlist trigger (pg_net) when access_granted_at is first set.
+  app.post('/api/webhooks/waitlist-approved', async (request, response) => {
+    const requestId = response.locals.requestId;
+    const {
+      secret,
+      resendApiKey,
+      inviteFrom = 'Cache <hello@meetcache.com>',
+      inviteReplyTo,
+      appUrl = 'https://www.meetcache.com',
+      fetchImpl = fetch,
+    } = waitlistAlert;
+    if (!secret || !resendApiKey) return sendError(response, 503, 'Waitlist invites are not configured.');
+    if (!secretsMatch(request.header('x-waitlist-alert-secret'), secret)) return sendError(response, 401, 'Invalid webhook secret.');
+
+    const email = optionalText(request.body?.email, 320)?.toLowerCase();
+    if (!email || !email.includes('@')) return sendError(response, 400, 'An approved email is required.');
+
+    const message = waitlistInviteEmail(email, appUrl);
+    try {
+      const resendResponse = await fetchImpl('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resendApiKey}`,
+          'Content-Type': 'application/json',
+          'Idempotency-Key': `waitlist-invite-${email}`,
+        },
+        body: JSON.stringify({
+          from: inviteFrom,
+          to: [email],
+          subject: message.subject,
+          text: message.text,
+          html: message.html,
+          ...(inviteReplyTo ? { reply_to: inviteReplyTo } : {}),
+        }),
+      });
+      if (!resendResponse.ok) throw new Error(`Resend responded with ${resendResponse.status}`);
+    } catch (error) {
+      logEvent('waitlist_invite_failed', requestId);
+      Sentry.captureException(error, { tags: { event: 'waitlist_invite_failed' } });
+      return sendError(response, 502, 'Could not send the waitlist invite.');
+    }
+
+    try {
+      const { error } = await supabase.from('waitlist').update({ invite_sent_at: new Date().toISOString() }).eq('email', email);
+      if (error) throw error;
+    } catch (error) {
+      // The invite went out; failing to record it should not report the send as failed.
+      Sentry.captureException(error, { tags: { event: 'waitlist_invite_record_failed' } });
+    }
+    logEvent('waitlist_invite_sent', requestId);
+    return response.status(202).json({ status: 'sent' });
   });
 
   app.get('/readyz', async (_request, response) => {
@@ -845,6 +943,9 @@ export function waitlistAlertFromEnv(env: NodeJS.ProcessEnv = process.env): Wait
     resendApiKey: env.RESEND_API_KEY || undefined,
     to: env.WAITLIST_ALERT_TO || undefined,
     from: env.WAITLIST_ALERT_FROM || undefined,
+    inviteFrom: env.WAITLIST_INVITE_FROM || undefined,
+    inviteReplyTo: env.WAITLIST_INVITE_REPLY_TO || undefined,
+    appUrl: env.APP_URL || undefined,
   };
 }
 
