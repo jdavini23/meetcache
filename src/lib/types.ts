@@ -36,6 +36,16 @@ export interface Message {
 
 export type MemoryType = 'trigger' | 'helps' | 'worsens' | 'parent_preference' | 'recurring_situation' | 'routine' | 'school_context' | 'sensory_context';
 
+export interface ChildMemory {
+  id: string;
+  child_profile_id: string;
+  memory_type: MemoryType;
+  content: string;
+  parent_action: 'accepted' | 'edited';
+  created_at: string;
+  updated_at: string;
+}
+
 export interface MemorySuggestion {
   id: string;
   assistant_message_id: string;

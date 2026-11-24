@@ -831,3 +831,89 @@ describe('POST /api/product-events', () => {
     expect(response.status).toBe(500);
   });
 });
+
+describe('memory management endpoints', () => {
+  const memory = {
+    ...approvedMemory,
+    child_profile_id: '73b050f5-49e0-426f-a847-234d0bc47b0d',
+    parent_action: 'accepted',
+    created_at: '2026-08-05T12:00:00.000Z',
+    updated_at: '2026-08-05T12:00:00.000Z',
+  };
+  const authenticated = vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null });
+
+  it('lists only the authenticated parent memories', async () => {
+    const memoryQuery = mockQuery({ data: [memory], error: null });
+    const app = createApp({
+      supabase: { auth: { getUser: authenticated }, from: vi.fn(() => memoryQuery) },
+      gemini: {}, geminiModel: 'test-model',
+    } as never);
+
+    const response = await request(app).get('/api/memories').set('Authorization', 'Bearer token');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ memories: [memory], limit: 12 });
+    expect(memoryQuery.eq).toHaveBeenCalledWith('user_id', 'user-1');
+  });
+
+  it('updates and deletes an owned memory through trusted database functions', async () => {
+    const rpc = vi.fn()
+      .mockResolvedValueOnce({ data: { ...memory, content: 'A countdown helps.' }, error: null })
+      .mockResolvedValueOnce({ data: memory.id, error: null });
+    const app = createApp({ supabase: { auth: { getUser: authenticated }, rpc }, gemini: {}, geminiModel: 'test-model' } as never);
+
+    const updated = await request(app).patch(`/api/memories/${memory.id}`).set('Authorization', 'Bearer token').send({ content: 'A countdown helps.' });
+    const deleted = await request(app).delete(`/api/memories/${memory.id}`).set('Authorization', 'Bearer token');
+
+    expect(updated.status).toBe(200);
+    expect(updated.body.memory.content).toBe('A countdown helps.');
+    expect(deleted.status).toBe(204);
+    expect(rpc).toHaveBeenNthCalledWith(1, 'update_child_memory', expect.objectContaining({ p_memory_id: memory.id, p_user_id: 'user-1' }));
+    expect(rpc).toHaveBeenNthCalledWith(2, 'delete_child_memory', { p_memory_id: memory.id, p_user_id: 'user-1' });
+  });
+
+  it('rejects unsafe edits before authentication and hides unowned memories', async () => {
+    const getUser = vi.fn();
+    const invalidApp = createApp({ supabase: { auth: { getUser } }, gemini: {}, geminiModel: 'test-model' } as never);
+    const invalid = await request(invalidApp).patch(`/api/memories/${memory.id}`).send({ content: 'Milo has ADHD.' });
+    expect(invalid.status).toBe(400);
+    const badId = await request(invalidApp).delete('/api/memories/not-a-uuid');
+    expect(badId.status).toBe(400);
+    expect(getUser).not.toHaveBeenCalled();
+
+    const missingApp = createApp({
+      supabase: { auth: { getUser: authenticated }, rpc: vi.fn().mockResolvedValue({ data: null, error: { message: 'Memory not found' } }) },
+      gemini: {}, geminiModel: 'test-model',
+    } as never);
+    const missing = await request(missingApp).delete(`/api/memories/${memory.id}`).set('Authorization', 'Bearer token');
+    expect(missing.status).toBe(404);
+  });
+
+  it('returns a stable conflict code when the atomic memory cap is reached', async () => {
+    const app = createApp({
+      supabase: { auth: { getUser: authenticated }, rpc: vi.fn().mockResolvedValue({ data: null, error: { message: 'memory_limit_reached' } }) },
+      gemini: {}, geminiModel: 'test-model',
+    } as never);
+
+    const response = await request(app).patch('/api/memory-suggestions/4aa0f971-6d61-4c4f-af11-74fe629d0626')
+      .set('Authorization', 'Bearer token').send({ action: 'accept' });
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('memory_limit_reached');
+  });
+
+  it('records memory manager opens as a client event', async () => {
+    const eventQuery = mockQuery({ data: null, error: null });
+    const app = createApp({ supabase: { auth: { getUser: authenticated }, from: vi.fn(() => eventQuery) }, gemini: {}, geminiModel: 'test-model' } as never);
+    const payload = {
+      eventName: 'memory_manager_opened',
+      subjectId: memory.child_profile_id,
+      clientEventId: 'ef9b6321-7f20-481f-8db7-40d0a71f9388',
+    };
+
+    const response = await request(app).post('/api/product-events').set('Authorization', 'Bearer token').send(payload);
+
+    expect(response.status).toBe(204);
+    expect(eventQuery.insert).toHaveBeenCalledWith({ user_id: 'user-1', event_name: payload.eventName, subject_id: payload.subjectId, client_event_id: payload.clientEventId });
+  });
+});

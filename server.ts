@@ -83,7 +83,9 @@ type ParsedCoachingResponse = {
 
 // Client-reported product events. Funnel steps that already live in source tables
 // (signup, invite, account, profile, messages, memories) are derived in SQL instead.
-const clientProductEvents = ['app_session_started', 'memory_use_disclosure_opened'] as const;
+const clientProductEvents = ['app_session_started', 'memory_manager_opened', 'memory_use_disclosure_opened'] as const;
+// Matches the per-child limit enforced by resolve_memory_suggestion.
+const memoryLimit = 12;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const unsafeMemoryPattern = /\b(autism|adhd|anxiety disorder|depression|diagnos(?:e|is)|allerg(?:y|ic)|medication|prescri(?:be|ption)|medical condition|therapy|therapist|abuse|neglect|dangerous|bad child|bad parent)\b/i;
 
@@ -280,8 +282,8 @@ export function waitlistInviteEmail(email: string, appUrl: string) {
   return { subject, text, html, signInUrl };
 }
 
-function sendError(response: express.Response, status: number, error: string) {
-  return response.status(status).json({ error, requestId: response.locals.requestId });
+function sendError(response: express.Response, status: number, error: string, code?: string) {
+  return response.status(status).json({ error, ...(code ? { code } : {}), requestId: response.locals.requestId });
 }
 
 async function getAuthenticatedUser(request: express.Request, response: express.Response, supabase: any) {
@@ -446,6 +448,74 @@ export function createApp({
       Sentry.captureException(error, { tags: { event: 'readiness_failed' } });
       logEvent('readiness_failed', response.locals.requestId);
       return sendError(response, 503, 'Cache is not ready.');
+    }
+  });
+
+  app.get('/api/memories', async (request, response) => {
+    const authenticated = await getAuthenticatedUser(request, response, supabase);
+    if (!authenticated) return;
+
+    try {
+      const { data, error } = await supabase.from('child_memories')
+        .select('id, child_profile_id, memory_type, content, parent_action, created_at, updated_at')
+        .eq('user_id', authenticated.user.id)
+        .order('updated_at', { ascending: false });
+      if (error) throw error;
+      return response.status(200).json({ memories: data ?? [], limit: memoryLimit });
+    } catch (error) {
+      Sentry.captureException(error, { tags: { event: 'memories_load_failed' } });
+      logEvent('memories_load_failed', response.locals.requestId);
+      return sendError(response, 500, 'Cache could not load saved memories right now.');
+    }
+  });
+
+  app.patch('/api/memories/:id', async (request, response) => {
+    const memoryId = request.params.id;
+    const content = typeof request.body?.content === 'string' ? request.body.content.trim() : '';
+    if (!uuidPattern.test(memoryId) || !content || content.length > 280 || unsafeMemoryPattern.test(content)) {
+      return sendError(response, 400, 'That memory could not be saved.');
+    }
+    const authenticated = await getAuthenticatedUser(request, response, supabase);
+    if (!authenticated) return;
+
+    try {
+      const { data, error } = await supabase.rpc('update_child_memory', {
+        p_memory_id: memoryId,
+        p_user_id: authenticated.user.id,
+        p_content: content,
+      });
+      if (error) {
+        if (error.message?.includes('not found')) return sendError(response, 404, 'Memory not found.');
+        throw error;
+      }
+      return response.status(200).json({ memory: data });
+    } catch (error) {
+      Sentry.captureException(error, { tags: { event: 'memory_update_failed' } });
+      logEvent('memory_update_failed', response.locals.requestId);
+      return sendError(response, 500, 'Cache could not update that memory right now.');
+    }
+  });
+
+  app.delete('/api/memories/:id', async (request, response) => {
+    const memoryId = request.params.id;
+    if (!uuidPattern.test(memoryId)) return sendError(response, 400, 'That memory could not be removed.');
+    const authenticated = await getAuthenticatedUser(request, response, supabase);
+    if (!authenticated) return;
+
+    try {
+      const { error } = await supabase.rpc('delete_child_memory', {
+        p_memory_id: memoryId,
+        p_user_id: authenticated.user.id,
+      });
+      if (error) {
+        if (error.message?.includes('not found')) return sendError(response, 404, 'Memory not found.');
+        throw error;
+      }
+      return response.status(204).send();
+    } catch (error) {
+      Sentry.captureException(error, { tags: { event: 'memory_delete_failed' } });
+      logEvent('memory_delete_failed', response.locals.requestId);
+      return sendError(response, 500, 'Cache could not remove that memory right now.');
     }
   });
 
@@ -635,7 +705,7 @@ export function createApp({
         p_action: action,
         p_content: action === 'accept' ? content : null,
       });
-      if (error?.message?.includes('memory_limit_reached')) return sendError(response, 409, 'This child already has 12 saved memories. Remove one before saving another.');
+      if (error?.message?.includes('memory_limit_reached')) return sendError(response, 409, `This child already has ${memoryLimit} saved memories. Remove one before saving another.`, 'memory_limit_reached');
       if (error) return sendError(response, error.message.includes('not found') ? 404 : 409, 'That memory suggestion is no longer available.');
       return response.status(200).json({ result: data });
     } catch (error) {
