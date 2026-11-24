@@ -81,6 +81,9 @@ type ParsedCoachingResponse = {
   usedMemories: UsedMemory[];
 };
 
+// Client-reported product events. Funnel steps that already live in source tables
+// (signup, invite, account, profile, messages, memories) are derived in SQL instead.
+const clientProductEvents = ['app_session_started', 'memory_use_disclosure_opened'] as const;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const unsafeMemoryPattern = /\b(autism|adhd|anxiety disorder|depression|diagnos(?:e|is)|allerg(?:y|ic)|medication|prescri(?:be|ption)|medical condition|therapy|therapist|abuse|neglect|dangerous|bad child|bad parent)\b/i;
 
@@ -446,22 +449,50 @@ export function createApp({
     }
   });
 
+  app.post('/api/product-events', async (request, response) => {
+    const eventName = request.body?.eventName;
+    const subjectId = request.body?.subjectId;
+    const clientEventId = request.body?.clientEventId;
+    if (!clientProductEvents.includes(eventName) || !uuidPattern.test(subjectId) || !uuidPattern.test(clientEventId)) {
+      return sendError(response, 400, 'That product event is not supported.');
+    }
+    const authenticated = await getAuthenticatedUser(request, response, supabase);
+    if (!authenticated) return;
+
+    try {
+      const { error } = await supabase.from('product_events').insert({
+        user_id: authenticated.user.id,
+        event_name: eventName,
+        subject_id: subjectId,
+        client_event_id: clientEventId,
+      });
+      // A retried beacon reuses its client event ID; the unique index makes it a no-op.
+      if (error && error.code !== '23505') throw error;
+      return response.status(204).send();
+    } catch (error) {
+      Sentry.captureException(error, { tags: { event: 'product_event_failed' } });
+      logEvent('product_event_failed', response.locals.requestId);
+      return sendError(response, 500, 'Cache could not record that event.');
+    }
+  });
+
   app.get('/api/account/export', async (request, response) => {
     const authenticated = await getAuthenticatedUser(request, response, supabase);
     if (!authenticated) return;
 
     try {
       const userId = authenticated.user.id;
-      const [profileResult, conversationsResult, messagesResult, memoriesResult, suggestionsResult, memoryUsesResult] = await Promise.all([
+      const [profileResult, conversationsResult, messagesResult, memoriesResult, suggestionsResult, memoryUsesResult, productEventsResult] = await Promise.all([
         supabase.from('child_profiles').select().eq('user_id', userId).maybeSingle(),
         supabase.from('conversations').select().eq('user_id', userId).order('created_at'),
         supabase.from('messages').select().eq('user_id', userId).order('created_at'),
         supabase.from('child_memories').select().eq('user_id', userId).order('created_at'),
         supabase.from('memory_suggestions').select().eq('user_id', userId).order('created_at'),
         supabase.from('memory_message_uses').select().eq('user_id', userId).order('created_at'),
+        supabase.from('product_events').select().eq('user_id', userId).order('created_at'),
       ]);
-      if (profileResult.error || conversationsResult.error || messagesResult.error || memoriesResult.error || suggestionsResult.error || memoryUsesResult.error) {
-        throw profileResult.error ?? conversationsResult.error ?? messagesResult.error ?? memoriesResult.error ?? suggestionsResult.error ?? memoryUsesResult.error;
+      if (profileResult.error || conversationsResult.error || messagesResult.error || memoriesResult.error || suggestionsResult.error || memoryUsesResult.error || productEventsResult.error) {
+        throw profileResult.error ?? conversationsResult.error ?? messagesResult.error ?? memoriesResult.error ?? suggestionsResult.error ?? memoryUsesResult.error ?? productEventsResult.error;
       }
 
       const exportData = {
@@ -473,6 +504,7 @@ export function createApp({
         memories: memoriesResult.data ?? [],
         memorySuggestions: suggestionsResult.data ?? [],
         memoryUses: memoryUsesResult.data ?? [],
+        productEvents: productEventsResult.data ?? [],
       };
       logEvent('account_exported', response.locals.requestId);
       response.attachment('cache-data-export.json');

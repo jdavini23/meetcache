@@ -275,6 +275,41 @@ describe('CacheApp', () => {
     await user.click(disclosure);
     expect(details).toHaveAttribute('open');
     expect(screen.getByText('A visual timer helps with transitions.')).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith('/api/product-events', expect.objectContaining({
+      body: expect.stringContaining('"eventName":"memory_use_disclosure_opened","subjectId":"assistant-1"'),
+    }));
+  });
+
+  it('records one app session event per browser tab, reusing its ID across reloads', async () => {
+    window.sessionStorage.clear();
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ suggestions: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    getSession.mockResolvedValue({ data: { session: { access_token: 'token', user: { id: 'user-1' } } } });
+    from.mockImplementation((table: string) => {
+      if (table === 'child_profiles') return queryResult(savedProfile);
+      if (table === 'conversations') return queryResult({ id: 'conversation-1', child_profile_id: 'profile-1', user_id: 'user-1' });
+      return queryResult([]);
+    });
+    const sessionEventBodies = () => fetchMock.mock.calls
+      .filter(([url]) => url === '/api/product-events')
+      .map(([, options]) => JSON.parse((options as RequestInit).body as string));
+
+    const first = render(<CacheApp />);
+    await screen.findByPlaceholderText('What is on your mind?');
+    first.unmount();
+    render(<CacheApp />);
+    await screen.findByPlaceholderText('What is on your mind?');
+
+    const bodies = sessionEventBodies();
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toEqual(expect.objectContaining({ eventName: 'app_session_started', subjectId: 'profile-1' }));
+    expect(bodies[1].clientEventId).toBe(bodies[0].clientEventId);
+    expect(fetchMock.mock.calls.find(([url]) => url === '/api/product-events')?.[1]).toEqual(expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: 'Bearer token' }),
+    }));
   });
 
   it('sends a composer draft with Enter and clears it after a successful response', async () => {
@@ -309,6 +344,7 @@ describe('CacheApp', () => {
     vi.stubGlobal('crypto', { randomUUID: vi.fn(() => 'f8b67515-5e62-4a65-b7c7-69b7d7c1b471') });
     vi.stubGlobal('fetch', vi.fn((url: string, options?: RequestInit) => {
       if (url.startsWith('/api/memory-suggestions')) return Promise.resolve(new Response(JSON.stringify({ suggestions: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      if (url === '/api/product-events') return Promise.resolve(new Response(null, { status: 204 }));
       return new Promise<Response>((_resolve, reject) => {
       pendingRequests.push(options ?? {});
       options?.signal?.addEventListener('abort', () => reject(new DOMException('Request aborted', 'AbortError')));
