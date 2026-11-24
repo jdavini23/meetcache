@@ -506,6 +506,7 @@ describe('launch-readiness endpoints', () => {
       .mockReturnValueOnce(mockQuery({ data: [parentMessage, assistantMessage], error: null }))
       .mockReturnValueOnce(mockQuery({ data: [], error: null }))
       .mockReturnValueOnce(mockQuery({ data: [], error: null }))
+      .mockReturnValueOnce(mockQuery({ data: [], error: null }))
       .mockReturnValueOnce(mockQuery({ data: [], error: null }));
     const app = createApp({ supabase: { auth: { getUser }, from }, gemini: {}, geminiModel: 'test-model' } as never);
 
@@ -521,11 +522,13 @@ describe('launch-readiness endpoints', () => {
       memories: [],
       memorySuggestions: [],
       memoryUses: [],
+      productEvents: [],
     }));
     expect(from).toHaveBeenCalledWith('child_profiles');
     expect(from).toHaveBeenCalledWith('conversations');
     expect(from).toHaveBeenCalledWith('messages');
     expect(from).toHaveBeenCalledWith('memory_message_uses');
+    expect(from).toHaveBeenCalledWith('product_events');
   });
 
   it('revokes sessions before deleting the authenticated account', async () => {
@@ -754,5 +757,77 @@ describe('waitlistInviteEmail', () => {
       inviteReplyTo: 'r@y.co',
       appUrl: 'https://a.co',
     });
+  });
+});
+
+describe('POST /api/product-events', () => {
+  const subjectId = '6f0b8a4e-3c1d-4b8e-9a51-0d6a2f3c9e17';
+  const clientEventId = 'a3d5c2b1-7e4f-4a6b-8c9d-1e2f3a4b5c6d';
+
+  function eventApp(insertError: { code?: string; message?: string } | null = null) {
+    const insert = vi.fn().mockResolvedValue({ data: null, error: insertError });
+    const from = vi.fn(() => ({ insert }));
+    const getUser = vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null });
+    const app = createApp({ supabase: { auth: { getUser }, from }, gemini: {}, geminiModel: 'test-model' } as never);
+    return { app, insert, from, getUser };
+  }
+
+  it('records a supported event for the signed-in parent', async () => {
+    const { app, insert, from } = eventApp();
+
+    const response = await request(app).post('/api/product-events').set('Authorization', 'Bearer token')
+      .send({ eventName: 'app_session_started', subjectId, clientEventId });
+
+    expect(response.status).toBe(204);
+    expect(from).toHaveBeenCalledWith('product_events');
+    expect(insert).toHaveBeenCalledWith({
+      user_id: 'user-1',
+      event_name: 'app_session_started',
+      subject_id: subjectId,
+      client_event_id: clientEventId,
+    });
+  });
+
+  it('rejects unsupported events and malformed IDs before authenticating', async () => {
+    const { app, getUser, insert } = eventApp();
+
+    for (const body of [
+      { eventName: 'memory_deleted', subjectId, clientEventId },
+      { eventName: 'app_session_started', subjectId: 'profile-1', clientEventId },
+      { eventName: 'app_session_started', subjectId },
+    ]) {
+      const response = await request(app).post('/api/product-events').set('Authorization', 'Bearer token').send(body);
+      expect(response.status).toBe(400);
+    }
+    expect(getUser).not.toHaveBeenCalled();
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it('requires a signed-in parent', async () => {
+    const { app, insert } = eventApp();
+
+    const response = await request(app).post('/api/product-events')
+      .send({ eventName: 'app_session_started', subjectId, clientEventId });
+
+    expect(response.status).toBe(401);
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it('treats a retried event as already recorded', async () => {
+    const { app } = eventApp({ code: '23505', message: 'duplicate key' });
+
+    const response = await request(app).post('/api/product-events').set('Authorization', 'Bearer token')
+      .send({ eventName: 'memory_use_disclosure_opened', subjectId, clientEventId });
+
+    expect(response.status).toBe(204);
+  });
+
+  it('returns 500 when the event cannot be stored', async () => {
+    const { app } = eventApp({ code: '42501', message: 'permission denied' });
+
+    const response = await request(app).post('/api/product-events').set('Authorization', 'Bearer token')
+      .send({ eventName: 'app_session_started', subjectId, clientEventId });
+
+    expect(response.status).toBe(500);
   });
 });

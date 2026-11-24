@@ -347,9 +347,9 @@ function MemorySuggestionCard({ suggestions, onResolve }: { suggestions: MemoryS
   </section>;
 }
 
-function MemoryUseDisclosure({ memories }: { memories: UsedMemory[] }) {
+function MemoryUseDisclosure({ memories, onOpen }: { memories: UsedMemory[]; onOpen?: () => void }) {
   if (!memories.length) return null;
-  return <details className="group mt-2 max-w-xl text-xs text-ink/60">
+  return <details className="group mt-2 max-w-xl text-xs text-ink/60" onToggle={(event) => { if (event.currentTarget.open) onOpen?.(); }}>
     <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-lg px-2 py-1 font-medium transition hover:bg-sage/10 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta">
       <span>Using saved context</span><ChevronDown className="size-3.5 transition group-open:rotate-180" aria-hidden="true" />
     </summary>
@@ -425,6 +425,29 @@ export default function CacheApp() {
     }
   };
 
+  // Product measurement is fire-and-forget: it never blocks or breaks the parent experience.
+  const recordProductEvent = (eventName: 'app_session_started' | 'memory_use_disclosure_opened', subjectId: string, accessToken = session?.access_token, clientEventId: string = crypto.randomUUID()) => {
+    if (!accessToken) return;
+    void fetch('/api/product-events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ eventName, subjectId, clientEventId }),
+    }).catch(() => undefined);
+  };
+
+  // One session event per browser tab, even when auth refreshes reload the account.
+  const recordAppSession = (profileId: string, accessToken: string) => {
+    try {
+      const storageKey = 'cache-app-session-event-id';
+      const existingId = window.sessionStorage.getItem(storageKey);
+      const eventId = existingId ?? crypto.randomUUID();
+      if (!existingId) window.sessionStorage.setItem(storageKey, eventId);
+      recordProductEvent('app_session_started', profileId, accessToken, eventId);
+    } catch {
+      recordProductEvent('app_session_started', profileId, accessToken);
+    }
+  };
+
   const loadAccount = async (activeSession: Session) => {
     setAppState('loading');
     const { data: profileData, error: profileError } = await supabase.from('child_profiles').select().maybeSingle();
@@ -432,6 +455,7 @@ export default function CacheApp() {
     if (!profileData) { setProfile(null); setAppState('onboarding'); return; }
     const savedProfile = profileData as ChildProfile;
     setProfile(savedProfile);
+    recordAppSession(savedProfile.id, activeSession.access_token);
     const { data: conversationData, error: conversationError } = await supabase.from('conversations').select().eq('child_profile_id', savedProfile.id).maybeSingle();
     if (conversationError) { setNotice('We could not load your conversation. Please refresh and try again.'); setAppState('error'); return; }
     let activeConversation = conversationData as Conversation | null;
@@ -794,7 +818,7 @@ export default function CacheApp() {
                 </div>
               </div>
             </div>}
-            {messages.map((message) => <div key={message.id}><ChatMessage message={message} />{message.role === 'assistant' && <><MemoryUseDisclosure memories={message.used_memories ?? []} /><MemorySuggestionCard suggestions={memorySuggestions[message.id] ?? []} onResolve={(suggestion, action, content) => void resolveMemorySuggestion(suggestion, action, content)} /></>}</div>)}
+            {messages.map((message) => <div key={message.id}><ChatMessage message={message} />{message.role === 'assistant' && <><MemoryUseDisclosure memories={message.used_memories ?? []} onOpen={() => recordProductEvent('memory_use_disclosure_opened', message.id)} /><MemorySuggestionCard suggestions={memorySuggestions[message.id] ?? []} onResolve={(suggestion, action, content) => void resolveMemorySuggestion(suggestion, action, content)} /></>}</div>)}
             {sending && <div className="flex w-fit items-center gap-2.5 rounded-2xl rounded-bl-md border border-sage/15 bg-sage/10 px-4 py-3 text-sm text-ink" role="status"><span className="grid size-7 place-items-center rounded-full bg-white/70 text-sage" aria-hidden="true"><Sparkles className="size-3.5" /></span><span>Cache is thinking<span className="chat-thinking-dots" aria-hidden="true"><i /><i /><i /></span></span><span className="sr-only">Cache is preparing a response</span></div>}
             <div ref={messagesEndRef} />
           </div>
