@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import CacheApp from './CacheApp';
 
@@ -345,6 +345,7 @@ describe('CacheApp', () => {
     vi.stubGlobal('fetch', vi.fn((url: string, options?: RequestInit) => {
       if (url.startsWith('/api/memory-suggestions')) return Promise.resolve(new Response(JSON.stringify({ suggestions: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
       if (url === '/api/product-events') return Promise.resolve(new Response(null, { status: 204 }));
+      if (url === '/api/memories') return Promise.resolve(new Response(JSON.stringify({ memories: [], limit: 12 }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
       return new Promise<Response>((_resolve, reject) => {
       pendingRequests.push(options ?? {});
       options?.signal?.addEventListener('abort', () => reject(new DOMException('Request aborted', 'AbortError')));
@@ -374,5 +375,107 @@ describe('CacheApp', () => {
     expect(pendingRequests[0].signal?.aborted).toBe(true);
     expect(pendingRequests.every((request) => JSON.parse(request.body as string).clientRequestId === 'f8b67515-5e62-4a65-b7c7-69b7d7c1b471')).toBe(true);
     expect(screen.getByText(/cache is still preparing this response/i)).toBeInTheDocument();
+  });
+  describe('saved memory management', () => {
+    const savedMemory = (id: string, content: string, memory_type = 'helps') => ({
+      id, child_profile_id: 'profile-1', memory_type, content, parent_action: 'accepted',
+      created_at: '2026-08-05T12:00:00.000Z', updated_at: '2026-08-05T12:00:00.000Z',
+    });
+    const json = (body: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }));
+
+    function signedInWith(routes: (url: string, options?: RequestInit) => Promise<Response> | undefined, messages: unknown[] = []) {
+      const fetchMock = vi.fn((url: string, options?: RequestInit) => routes(url, options)
+        ?? (url === '/api/product-events' ? Promise.resolve(new Response(null, { status: 204 })) : json({ suggestions: [] })));
+      vi.stubGlobal('fetch', fetchMock);
+      getSession.mockResolvedValue({ data: { session: { access_token: 'token', user: { id: 'user-1' } } } });
+      from.mockImplementation((table: string) => {
+        if (table === 'child_profiles') return queryResult(savedProfile);
+        if (table === 'conversations') return queryResult({ id: 'conversation-1', child_profile_id: 'profile-1', user_id: 'user-1' });
+        if (table === 'messages') return queryResult(messages);
+        return queryResult([]);
+      });
+      return fetchMock;
+    }
+
+    it('lets a parent edit and remove a saved memory', async () => {
+      const user = userEvent.setup();
+      const fetchMock = signedInWith((url, options) => {
+        if (url === '/api/memories') return json({ memories: [savedMemory('memory-1', 'A visual timer helps.'), savedMemory('memory-2', 'Loud rooms are hard.', 'trigger')], limit: 12 });
+        if (url === '/api/memories/memory-1' && options?.method === 'PATCH') return json({ memory: savedMemory('memory-1', 'A sand timer helps.') });
+        if (url === '/api/memories/memory-2' && options?.method === 'DELETE') return Promise.resolve(new Response(null, { status: 204 }));
+        return undefined;
+      });
+      render(<CacheApp />);
+
+      const panel = (await screen.findByRole('heading', { name: 'What Cache remembers' })).closest('section')!;
+      expect(within(panel).getByText('2 of 12')).toBeInTheDocument();
+      expect(within(panel).getByText('What helps')).toBeInTheDocument();
+      expect(within(panel).getByText('Triggers')).toBeInTheDocument();
+
+      await user.click(within(panel).getByRole('button', { name: 'Edit memory: A visual timer helps.' }));
+      const editor = within(panel).getByLabelText('Edit saved memory');
+      await user.clear(editor);
+      await user.type(editor, 'A sand timer helps.');
+      await user.click(within(panel).getByRole('button', { name: 'Save changes' }));
+      expect(await within(panel).findByText('A sand timer helps.')).toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledWith('/api/memories/memory-1', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ content: 'A sand timer helps.' }) }));
+
+      await user.click(within(panel).getByRole('button', { name: 'Remove memory: Loud rooms are hard.' }));
+      expect(within(panel).getByText('Remove this memory?')).toBeInTheDocument();
+      await user.click(within(panel).getByRole('button', { name: 'Remove' }));
+      expect(await within(panel).findByText('1 of 12')).toBeInTheDocument();
+      expect(within(panel).queryByText('Loud rooms are hard.')).not.toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledWith('/api/memories/memory-2', expect.objectContaining({ method: 'DELETE' }));
+    });
+
+    it('keeps the suggestion and offers a way to make room when the memory limit is reached', async () => {
+      const user = userEvent.setup();
+      const fullMemories = Array.from({ length: 12 }, (_, index) => savedMemory(`memory-${index}`, `Saved detail ${index}.`));
+      const fetchMock = signedInWith((url, options) => {
+        if (url === '/api/memories') return json({ memories: fullMemories, limit: 12 });
+        if (url.startsWith('/api/memory-suggestions?')) return json({ suggestions: [{ id: 'suggestion-1', assistant_message_id: 'assistant-1', suggested_type: 'trigger', suggested_content: 'Transitions are harder after screen time.', decision: 'pending' }] });
+        if (url === '/api/memory-suggestions/suggestion-1' && options?.method === 'PATCH') return json({ error: 'This child already has 12 saved memories. Remove one before saving another.', code: 'memory_limit_reached' }, 409);
+        return undefined;
+      }, [{ id: 'assistant-1', conversation_id: 'conversation-1', user_id: 'user-1', role: 'assistant', content: 'Try a visual timer.', created_at: '2026-01-01T00:00:00.000Z' }]);
+      render(<CacheApp />);
+
+      const card = (await screen.findByText('Want me to remember anything from this?')).closest('section')!;
+      await user.click(within(card).getByRole('button', { name: 'Save' }));
+
+      expect(await within(card).findByRole('alert')).toHaveTextContent('This child already has 12 saved memories. Remove one before saving another.');
+      expect(within(card).getByText('Transitions are harder after screen time.')).toBeInTheDocument();
+      await user.click(within(card).getByRole('button', { name: 'Manage saved memories' }));
+
+      const drawer = await screen.findByRole('dialog', { name: "Milo's saved context" });
+      expect(within(drawer).getByRole('heading', { name: 'What Cache remembers' })).toHaveFocus();
+      expect(within(drawer).getByText('12 of 12')).toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledWith('/api/product-events', expect.objectContaining({
+        body: expect.stringContaining('"eventName":"memory_manager_opened","subjectId":"profile-1"'),
+      }));
+    });
+
+    it('refreshes saved memories after a suggestion is accepted', async () => {
+      const user = userEvent.setup();
+      let memories = [savedMemory('memory-1', 'A visual timer helps.')];
+      signedInWith((url, options) => {
+        if (url === '/api/memories') return json({ memories, limit: 12 });
+        if (url.startsWith('/api/memory-suggestions?')) return json({ suggestions: [{ id: 'suggestion-1', assistant_message_id: 'assistant-1', suggested_type: 'trigger', suggested_content: 'Transitions are harder after screen time.', decision: 'pending' }] });
+        if (url === '/api/memory-suggestions/suggestion-1' && options?.method === 'PATCH') {
+          memories = [...memories, savedMemory('memory-2', 'Transitions are harder after screen time.', 'trigger')];
+          return json({ result: { decision: 'accepted' } });
+        }
+        return undefined;
+      }, [{ id: 'assistant-1', conversation_id: 'conversation-1', user_id: 'user-1', role: 'assistant', content: 'Try a visual timer.', created_at: '2026-01-01T00:00:00.000Z' }]);
+      render(<CacheApp />);
+
+      const panel = (await screen.findByRole('heading', { name: 'What Cache remembers' })).closest('section')!;
+      expect(await within(panel).findByText('1 of 12')).toBeInTheDocument();
+      const card = (await screen.findByText('Want me to remember anything from this?')).closest('section')!;
+      await user.click(within(card).getByRole('button', { name: 'Save' }));
+
+      expect(await within(panel).findByText('2 of 12')).toBeInTheDocument();
+      expect(within(panel).getByText('Transitions are harder after screen time.')).toBeInTheDocument();
+      expect(screen.queryByText('Want me to remember anything from this?')).not.toBeInTheDocument();
+    });
   });
 });

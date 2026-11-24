@@ -49,6 +49,12 @@ The test suite uses mocked Supabase and Gemini responses, so it does not require
   deleting the Supabase Auth user; the existing foreign-key cascades remove
   application data immediately. Provider backups follow their normal
   retention lifecycle.
+- Parents review, edit, and remove saved memories from the context panel through
+  `GET /api/memories`, `PATCH /api/memories/:id`, and `DELETE /api/memories/:id`.
+  Edits and removals run through the `update_child_memory` and
+  `delete_child_memory` database functions, which check ownership. Each child
+  can keep up to 12 memories; at the limit, saving a suggestion returns `409`
+  with `code: memory_limit_reached`, and the app links to the memory manager.
 - `/app` records an `app_session_started` product event once per browser tab and
   a `memory_use_disclosure_opened` event when a parent expands "Using saved
   context". Events go through `POST /api/product-events`, carry only IDs, and are

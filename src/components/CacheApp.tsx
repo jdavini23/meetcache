@@ -4,8 +4,9 @@ import { AlertCircle, ArrowRight, ChevronDown, ChevronUp, Info, Loader2, Lock, L
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { formatChildAge, isChildAgeSupported } from '../lib/childAge';
-import type { ChildProfile, Conversation, MemorySuggestion, Message, UsedMemory } from '../lib/types';
+import type { ChildMemory, ChildProfile, Conversation, MemorySuggestion, Message, UsedMemory } from '../lib/types';
 import ChatMarkdown from './ChatMarkdown';
+import MemoryManager from './MemoryManager';
 import WaitlistForm from './WaitlistForm';
 
 type AppState = 'loading' | 'signed-out' | 'onboarding' | 'ready' | 'error';
@@ -271,9 +272,10 @@ interface ContextPanelProps {
   profile: ChildProfile;
   onEdit: () => void;
   editButtonRef?: RefObject<HTMLButtonElement | null>;
+  children?: ReactNode;
 }
 
-function ContextPanel({ profile, onEdit, editButtonRef }: ContextPanelProps) {
+function ContextPanel({ profile, onEdit, editButtonRef, children }: ContextPanelProps) {
   return <>
     <p className="app-eyebrow">Saved context</p>
     <div className="mt-2 flex items-start justify-between gap-3">
@@ -297,6 +299,7 @@ function ContextPanel({ profile, onEdit, editButtonRef }: ContextPanelProps) {
       </section>}
     </div>
     <button ref={editButtonRef} onClick={onEdit} className="mt-6 flex items-center gap-2 rounded-lg px-1 py-2 text-sm font-semibold text-sage transition hover:bg-sage/10 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta"><Pencil className="size-4" />Edit saved context</button>
+    {children}
   </>;
 }
 
@@ -324,10 +327,27 @@ function AccountPanel({ exporting, deleting, deleteConfirmation, onExport, onDel
   </>;
 }
 
-function MemorySuggestionCard({ suggestions, onResolve }: { suggestions: MemorySuggestion[]; onResolve: (suggestion: MemorySuggestion, action: 'accept' | 'reject', content?: string) => void }) {
+interface MemorySuggestionCardProps {
+  suggestions: MemorySuggestion[];
+  onResolve: (suggestion: MemorySuggestion, action: 'accept' | 'reject', content?: string) => Promise<SuggestionResolveError | null>;
+  onManage: () => void;
+}
+
+function MemorySuggestionCard({ suggestions, onResolve, onManage }: MemorySuggestionCardProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  const [resolveError, setResolveError] = useState<SuggestionResolveError | null>(null);
   if (!suggestions.length) return null;
+
+  const resolve = async (suggestion: MemorySuggestion, action: 'accept' | 'reject', content?: string) => {
+    setResolveError(null);
+    const nextError = await onResolve(suggestion, action, content);
+    if (nextError) {
+      setResolveError(nextError);
+      return;
+    }
+    setEditingId(null);
+  };
 
   return <section className="memory-suggestion-card" aria-label="Memory suggestions">
     <p className="text-sm font-semibold text-ink">Want me to remember anything from this?</p>
@@ -337,13 +357,17 @@ function MemorySuggestionCard({ suggestions, onResolve }: { suggestions: MemoryS
         {editingId === suggestion.id ? <>
           <label className="sr-only" htmlFor={`memory-suggestion-${suggestion.id}`}>Edit memory suggestion</label>
           <textarea id={`memory-suggestion-${suggestion.id}`} value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={280} className="app-input min-h-20 resize-y" />
-          <div className="mt-2 flex gap-2"><button type="button" onClick={() => { onResolve(suggestion, 'accept', draft); setEditingId(null); }} disabled={!draft.trim()} className="memory-suggestion-save">Save memory</button><button type="button" onClick={() => setEditingId(null)} className="memory-suggestion-secondary">Cancel</button></div>
+          <div className="mt-2 flex gap-2"><button type="button" onClick={() => void resolve(suggestion, 'accept', draft)} disabled={!draft.trim()} className="memory-suggestion-save">Save memory</button><button type="button" onClick={() => setEditingId(null)} className="memory-suggestion-secondary">Cancel</button></div>
         </> : <>
           <p className="text-sm leading-relaxed text-ink">{suggestion.suggested_content}</p>
-          <div className="mt-2 flex flex-wrap gap-2"><button type="button" onClick={() => onResolve(suggestion, 'accept')} className="memory-suggestion-save">Save</button><button type="button" onClick={() => { setDraft(suggestion.suggested_content); setEditingId(suggestion.id); }} className="memory-suggestion-secondary">Edit</button><button type="button" onClick={() => onResolve(suggestion, 'reject')} className="memory-suggestion-secondary">Dismiss</button></div>
+          <div className="mt-2 flex flex-wrap gap-2"><button type="button" onClick={() => void resolve(suggestion, 'accept')} className="memory-suggestion-save">Save</button><button type="button" onClick={() => { setDraft(suggestion.suggested_content); setEditingId(suggestion.id); }} className="memory-suggestion-secondary">Edit</button><button type="button" onClick={() => void resolve(suggestion, 'reject')} className="memory-suggestion-secondary">Dismiss</button></div>
         </>}
       </div>)}
     </div>
+    {resolveError && <div className="mt-3 rounded-xl border border-red-700/15 bg-red-50 px-3 py-2.5 text-xs text-red-800" role="alert">
+      <p>{resolveError.message}</p>
+      {resolveError.limitReached && <button type="button" onClick={onManage} className="mt-1.5 font-semibold underline underline-offset-2">Manage saved memories</button>}
+    </div>}
   </section>;
 }
 
@@ -359,6 +383,13 @@ function MemoryUseDisclosure({ memories, onOpen }: { memories: UsedMemory[]; onO
   </details>;
 }
 
+interface SuggestionResolveError {
+  message: string;
+  limitReached: boolean;
+}
+
+const DEFAULT_MEMORY_LIMIT = 12;
+
 // The Supabase "Before User Created" hook rejects emails that are not approved on the waitlist.
 export function isInviteOnlyError(error: { status?: number; message?: string }) {
   return error.status === 403 || /invite-only/i.test(error.message ?? '');
@@ -371,6 +402,13 @@ export default function CacheApp() {
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [memorySuggestions, setMemorySuggestions] = useState<Record<string, MemorySuggestion[]>>({});
+  const [memories, setMemories] = useState<ChildMemory[]>([]);
+  const [memoryLimit, setMemoryLimit] = useState(DEFAULT_MEMORY_LIMIT);
+  const [memoriesLoading, setMemoriesLoading] = useState(false);
+  const [memoriesError, setMemoriesError] = useState('');
+  const [drawerFocusMemories, setDrawerFocusMemories] = useState(false);
+  const desktopMemoryHeadingRef = useRef<HTMLHeadingElement>(null);
+  const mobileMemoryHeadingRef = useRef<HTMLHeadingElement>(null);
   // Invite emails link to /app?email=... so the sign-in field is already filled in.
   const [email, setEmail] = useState(() => {
     try { return new URLSearchParams(window.location.search).get('email')?.trim().slice(0, 320) ?? ''; } catch { return ''; }
@@ -426,7 +464,7 @@ export default function CacheApp() {
   };
 
   // Product measurement is fire-and-forget: it never blocks or breaks the parent experience.
-  const recordProductEvent = (eventName: 'app_session_started' | 'memory_use_disclosure_opened', subjectId: string, accessToken = session?.access_token, clientEventId: string = crypto.randomUUID()) => {
+  const recordProductEvent = (eventName: 'app_session_started' | 'memory_manager_opened' | 'memory_use_disclosure_opened', subjectId: string, accessToken = session?.access_token, clientEventId: string = crypto.randomUUID()) => {
     if (!accessToken) return;
     void fetch('/api/product-events', {
       method: 'POST',
@@ -448,6 +486,82 @@ export default function CacheApp() {
     }
   };
 
+  const loadMemories = async (accessToken: string) => {
+    setMemoriesLoading(true);
+    setMemoriesError('');
+    try {
+      const response = await fetch('/api/memories', { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (!response.ok) throw new Error('Cache could not load saved memories right now.');
+      const body = await response.json() as { memories?: ChildMemory[]; limit?: number };
+      setMemories(body.memories ?? []);
+      setMemoryLimit(body.limit ?? DEFAULT_MEMORY_LIMIT);
+    } catch {
+      setMemoriesError('Cache could not load saved memories right now.');
+    } finally {
+      setMemoriesLoading(false);
+    }
+  };
+
+  const readError = async (response: Response, fallback: string) => {
+    try {
+      const body = await response.json() as { error?: string; code?: string };
+      return { message: body.error ?? fallback, code: body.code };
+    } catch {
+      return { message: fallback, code: undefined };
+    }
+  };
+
+  const updateMemory = async (memoryId: string, content: string) => {
+    if (!session) return 'Please sign in again to update this memory.';
+    try {
+      const response = await fetch(`/api/memories/${memoryId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ content }),
+      });
+      if (!response.ok) return (await readError(response, 'Cache could not update that memory right now.')).message;
+      const body = await response.json() as { memory: ChildMemory };
+      setMemories((current) => current.map((memory) => memory.id === memoryId ? body.memory : memory));
+      return null;
+    } catch {
+      return 'Cache could not update that memory right now.';
+    }
+  };
+
+  const deleteMemory = async (memoryId: string) => {
+    if (!session) return 'Please sign in again to remove this memory.';
+    try {
+      const response = await fetch(`/api/memories/${memoryId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      // A 404 means it is already gone, which is what the parent asked for.
+      if (!response.ok && response.status !== 404) return (await readError(response, 'Cache could not remove that memory right now.')).message;
+      setMemories((current) => current.filter((memory) => memory.id !== memoryId));
+      return null;
+    } catch {
+      return 'Cache could not remove that memory right now.';
+    }
+  };
+
+  const openContextDrawer = (focusMemories: boolean) => {
+    setDrawerFocusMemories(focusMemories);
+    setContextOpen(true);
+    if (profile) recordProductEvent('memory_manager_opened', profile.id);
+  };
+
+  // The desktop sidebar is always visible; on smaller screens the memories live in the context drawer.
+  const openMemoryManager = () => {
+    const isDesktop = typeof window.matchMedia === 'function' && window.matchMedia('(min-width: 1024px)').matches;
+    if (!isDesktop) {
+      openContextDrawer(true);
+      return;
+    }
+    if (profile) recordProductEvent('memory_manager_opened', profile.id);
+    desktopMemoryHeadingRef.current?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+    desktopMemoryHeadingRef.current?.focus();
+  };
+
   const loadAccount = async (activeSession: Session) => {
     setAppState('loading');
     const { data: profileData, error: profileError } = await supabase.from('child_profiles').select().maybeSingle();
@@ -456,6 +570,7 @@ export default function CacheApp() {
     const savedProfile = profileData as ChildProfile;
     setProfile(savedProfile);
     recordAppSession(savedProfile.id, activeSession.access_token);
+    void loadMemories(activeSession.access_token);
     const { data: conversationData, error: conversationError } = await supabase.from('conversations').select().eq('child_profile_id', savedProfile.id).maybeSingle();
     if (conversationError) { setNotice('We could not load your conversation. Please refresh and try again.'); setAppState('error'); return; }
     let activeConversation = conversationData as Conversation | null;
@@ -510,7 +625,7 @@ export default function CacheApp() {
     });
     const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
-      if (nextSession) void loadAccount(nextSession); else { setProfile(null); setMessages([]); setMemorySuggestions({}); setAppState('signed-out'); }
+      if (nextSession) void loadAccount(nextSession); else { setProfile(null); setMessages([]); setMemorySuggestions({}); setMemories([]); setAppState('signed-out'); }
     });
     return () => listener.subscription.unsubscribe();
   }, []);
@@ -523,7 +638,7 @@ export default function CacheApp() {
     }
   }, [messages.length, sending]);
 
-  useModalFocus(contextOpen, contextDrawerRef, closeContext);
+  useModalFocus(contextOpen, contextDrawerRef, closeContext, drawerFocusMemories ? mobileMemoryHeadingRef : undefined);
   useModalFocus(accountOpen, accountDialogRef, closeAccount, accountCloseButtonRef, accountButtonRef);
   useModalFocus(editing, editDialogRef, closeEditing, editCloseButtonRef, editButtonRef);
 
@@ -614,21 +729,27 @@ export default function CacheApp() {
     }
   };
 
-  const resolveMemorySuggestion = async (suggestion: MemorySuggestion, action: 'accept' | 'reject', content?: string) => {
-    if (!session) return;
+  const resolveMemorySuggestion = async (suggestion: MemorySuggestion, action: 'accept' | 'reject', content?: string): Promise<SuggestionResolveError | null> => {
+    if (!session) return { message: 'Please sign in again to save this memory.', limitReached: false };
     try {
       const response = await fetch(`/api/memory-suggestions/${suggestion.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({ action, ...(content !== undefined ? { content } : {}) }),
       });
-      if (!response.ok) return;
+      if (!response.ok) {
+        // Keep the suggestion so the parent can retry, or make room and save it.
+        const { message, code } = await readError(response, 'Cache could not save that memory right now.');
+        return { message, limitReached: code === 'memory_limit_reached' };
+      }
       setMemorySuggestions((current) => {
         const remaining = (current[suggestion.assistant_message_id] ?? []).filter((item) => item.id !== suggestion.id);
         return { ...current, [suggestion.assistant_message_id]: remaining };
       });
+      if (action === 'accept') void loadMemories(session.access_token);
+      return null;
     } catch {
-      // Preserve the suggestion so the parent can try again later.
+      return { message: 'Cache could not save that memory right now.', limitReached: false };
     }
   };
 
@@ -792,7 +913,7 @@ export default function CacheApp() {
         </div>
       </header>
       <div className="mx-auto grid w-full min-h-0 max-w-6xl flex-1 gap-4 px-4 pb-4 sm:px-6 lg:grid-cols-[236px_minmax(0,1fr)] lg:gap-5 lg:pb-6">
-        {profile && <aside className="hidden min-h-0 overflow-y-auto rounded-[24px] border border-ink/10 bg-white/60 px-5 py-6 lg:block"><ContextPanel profile={profile} onEdit={() => setEditing(true)} editButtonRef={editButtonRef} /></aside>}
+        {profile && <aside className="hidden min-h-0 overflow-y-auto rounded-[24px] border border-ink/10 bg-white/60 px-5 py-6 lg:block"><ContextPanel profile={profile} onEdit={() => setEditing(true)} editButtonRef={editButtonRef}><MemoryManager instance="desktop" headingRef={desktopMemoryHeadingRef} memories={memories} limit={memoryLimit} loading={memoriesLoading} error={memoriesError} onUpdate={updateMemory} onDelete={deleteMemory} onRetry={() => session && void loadMemories(session.access_token)} /></ContextPanel></aside>}
         <section className="flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-ink/10 bg-white shadow-[0_12px_32px_-18px_rgba(43,38,34,0.2)]">
           <div className="shrink-0 border-b border-ink/10 px-5 pb-4 pt-5 sm:px-7 sm:pt-6">
             <p className="app-eyebrow">A calm place to think it through</p>
@@ -804,7 +925,7 @@ export default function CacheApp() {
               <summary className="flex w-fit cursor-pointer items-center gap-1.5 font-medium transition hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta"><Info className="size-3.5" />Guidance details</summary>
               <p className="mt-2 max-w-xl leading-relaxed">Cache offers general parenting guidance, not medical, mental-health, or emergency care. If someone may be in immediate danger, Cache will pause normal coaching and direct you to urgent help.</p>
             </details>
-            {profile && <button type="button" onClick={() => setContextOpen(true)} className="mt-3 inline-flex items-center gap-2 rounded-full border border-sage/20 bg-sage/10 px-3 py-1.5 text-left text-xs font-semibold text-sage transition hover:bg-sage/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta lg:hidden">
+            {profile && <button type="button" onClick={() => openContextDrawer(false)} className="mt-3 inline-flex items-center gap-2 rounded-full border border-sage/20 bg-sage/10 px-3 py-1.5 text-left text-xs font-semibold text-sage transition hover:bg-sage/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta lg:hidden">
               <span className="size-1.5 rounded-full bg-sage" /><span>Saved context · {profile.nickname}</span><ChevronUp className="size-3.5" />
             </button>}
           </div>
@@ -818,7 +939,7 @@ export default function CacheApp() {
                 </div>
               </div>
             </div>}
-            {messages.map((message) => <div key={message.id}><ChatMessage message={message} />{message.role === 'assistant' && <><MemoryUseDisclosure memories={message.used_memories ?? []} onOpen={() => recordProductEvent('memory_use_disclosure_opened', message.id)} /><MemorySuggestionCard suggestions={memorySuggestions[message.id] ?? []} onResolve={(suggestion, action, content) => void resolveMemorySuggestion(suggestion, action, content)} /></>}</div>)}
+            {messages.map((message) => <div key={message.id}><ChatMessage message={message} />{message.role === 'assistant' && <><MemoryUseDisclosure memories={message.used_memories ?? []} onOpen={() => recordProductEvent('memory_use_disclosure_opened', message.id)} /><MemorySuggestionCard suggestions={memorySuggestions[message.id] ?? []} onResolve={resolveMemorySuggestion} onManage={openMemoryManager} /></>}</div>)}
             {sending && <div className="flex w-fit items-center gap-2.5 rounded-2xl rounded-bl-md border border-sage/15 bg-sage/10 px-4 py-3 text-sm text-ink" role="status"><span className="grid size-7 place-items-center rounded-full bg-white/70 text-sage" aria-hidden="true"><Sparkles className="size-3.5" /></span><span>Cache is thinking<span className="chat-thinking-dots" aria-hidden="true"><i /><i /><i /></span></span><span className="sr-only">Cache is preparing a response</span></div>}
             <div ref={messagesEndRef} />
           </div>
@@ -837,7 +958,7 @@ export default function CacheApp() {
         <button type="button" onClick={closeContext} className="absolute inset-0 bg-ink/35" aria-label="Close saved context" />
         <section ref={contextDrawerRef} className="absolute inset-x-0 bottom-0 max-h-[85dvh] overflow-y-auto rounded-t-[28px] bg-cream p-6 pb-8 shadow-[0_-12px_32px_-12px_rgba(43,38,34,0.28)]" role="dialog" aria-modal="true" aria-label={`${profile.nickname}'s saved context`}>
           <button type="button" onClick={closeContext} className="absolute right-5 top-5 rounded-lg p-2 text-ink/60 hover:bg-ink/5 hover:text-ink" aria-label="Close saved context"><X className="size-5" /></button>
-          <div className="pr-10"><ContextPanel profile={profile} onEdit={() => { closeContext(); setEditing(true); }} editButtonRef={editButtonRef} /></div>
+          <div className="pr-10"><ContextPanel profile={profile} onEdit={() => { closeContext(); setEditing(true); }} editButtonRef={editButtonRef}><MemoryManager instance="mobile" headingRef={mobileMemoryHeadingRef} memories={memories} limit={memoryLimit} loading={memoriesLoading} error={memoriesError} onUpdate={updateMemory} onDelete={deleteMemory} onRetry={() => session && void loadMemories(session.access_token)} /></ContextPanel></div>
         </section>
       </div>}
       {editing && profile && <div className="fixed inset-0 z-40 grid place-items-center bg-ink/35 p-4" role="presentation"><section ref={editDialogRef} className="context-form-workspace flex max-h-[calc(100dvh-2rem)] w-full max-w-3xl flex-col" role="dialog" aria-modal="true" aria-labelledby="edit-context-title"><div className="flex shrink-0 items-start justify-between gap-5 border-b border-ink/10 px-5 py-5 sm:px-8 sm:py-6"><div><p className="app-eyebrow">Saved context</p><h2 id="edit-context-title" className="mt-2 font-serif text-3xl">Update {profile.nickname}’s context</h2><p className="mt-2 text-sm leading-relaxed text-ink/65">Keep the details that help Cache support your family up to date.</p></div><button ref={editCloseButtonRef} type="button" onClick={closeEditing} className="rounded-lg p-2 text-ink/60 transition hover:bg-ink/5 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta" aria-label="Close context editor"><X className="size-5" /></button></div><div className="min-h-0 overflow-y-auto px-5 py-6 sm:px-8 sm:py-8"><ProfileForm initialProfile={profile} onSave={(saved) => { setProfile(saved); closeEditing(); }} onCancel={closeEditing} /></div></section></div>}
