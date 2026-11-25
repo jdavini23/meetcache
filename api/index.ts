@@ -27,7 +27,7 @@ const supabase = createClient(required('SUPABASE_URL'), required('SUPABASE_SERVI
 const app = createApp({
   supabase,
   gemini: new GoogleGenAI({ apiKey: required('GEMINI_API_KEY') }),
-  geminiModel: process.env.GEMINI_MODEL || 'gemini-3.5-flash',
+  geminiModel: process.env.GEMINI_MODEL || 'gemini-3.6-flash',
   rateLimitMax: positiveInteger(process.env.CHAT_RATE_LIMIT_MAX, 10),
   rateLimitWindowSeconds: positiveInteger(process.env.CHAT_RATE_LIMIT_WINDOW_SECONDS, 60),
   dailyLimitMax: positiveInteger(process.env.CHAT_DAILY_LIMIT_MAX, 100),
