@@ -61,7 +61,9 @@ The test suite uses mocked Supabase and Gemini responses, so it does not require
   included in the account export. Read the funnel from the Supabase SQL editor
   with `select * from private.cache_funnel;` (per-person detail lives in
   `private.cache_user_activity`). Both views are private to the database owner
-  and service role.
+  and service role. Add your own test addresses to `private.internal_emails`
+  in the SQL editor so the funnel counts only real parents; never commit them
+  to a migration.
 - Set `SENTRY_DSN` and `VITE_SENTRY_DSN` to enable sanitized server and browser
   error reporting. Cache removes request bodies, headers, cookies, and user
   data before reporting events. Monitor `/readyz` and create an alert for
