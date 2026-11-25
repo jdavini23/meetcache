@@ -81,10 +81,8 @@ medium breakpoint upward.
 ```text
 Sticky navigation
 Hero: plant + early-access eyebrow + promise + email form
-Problem: three reasons generic advice falls short
 Product example: two-message conversation
 How it works: three-step sequence
-Difference: four product-value points
 Final CTA: dark conversion card + email form
 Footer
 ```
@@ -124,9 +122,8 @@ conversation. Do not present Cache as medical or emergency care.
 
 ### Information cards
 
-Problem and process cards become three columns at `md`; the product-difference
-cards become two columns at `sm`. Preserve a single-column stack below those
-breakpoints. Cards use consistent 32px padding and favor short title/body
+Process cards become three columns at `md`. Preserve a single-column stack below
+that breakpoint. Cards use consistent 32px padding and favor short title/body
 pairs over dense text.
 
 ### Product example
