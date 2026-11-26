@@ -284,6 +284,7 @@ describe('POST /api/chat', () => {
 
     expect(response.status).toBe(429);
     expect(response.headers['retry-after']).toBe('60');
+    expect(response.body.error).toBe('Cache needs a short break.');
     expect(dependencies.supabase.from).toHaveBeenCalledTimes(3);
     expect(dependencies.gemini.models.generateContent).not.toHaveBeenCalled();
   });
@@ -371,7 +372,7 @@ describe('POST /api/chat', () => {
 
     expect(response.status).toBe(429);
     expect(response.headers['retry-after']).toBe('3600');
-    expect(response.body.error).toContain('today’s message limit');
+    expect(response.body.error).toBe('You’ve reached today’s message limit. Cache will be ready again tomorrow.');
     expect(dependencies.supabase.from).toHaveBeenCalledTimes(3);
     expect(dependencies.gemini.models.generateContent).not.toHaveBeenCalled();
   });
@@ -411,6 +412,10 @@ describe('POST /api/chat', () => {
     }));
     expect(reclaim.lt).toHaveBeenCalledWith('processing_started_at', expect.any(String));
     expect(dependencies.gemini.models.generateContent).not.toHaveBeenCalled();
+    const insertedContent = dependencies.supabase.from.mock.results
+      .flatMap((result) => result.value.insert.mock.calls.map((call: [{ content?: string }]) => call[0]?.content))
+      .filter(Boolean);
+    expect(insertedContent).toContain('Hi. I’m here. What’s going on with Milo today?');
   });
 
   it('uses a fixed urgent-care response without calling Gemini', async () => {
