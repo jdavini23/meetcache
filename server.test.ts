@@ -255,6 +255,12 @@ describe('POST /api/chat', () => {
       contents: expect.stringContaining('Nickname: Milo'),
       config: expect.objectContaining({ responseMimeType: 'application/json' }),
     }));
+    const prompt = dependencies.gemini.models.generateContent.mock.calls[0][0].contents as string;
+    expect(prompt).toContain('You are Cache, a calm, warm guide for parents of children ages 1 to 6.');
+    expect(prompt).toContain('Open with one short, kind sentence that shows you heard the parent. Then give one concrete thing to try today. Add at most two short supporting points.');
+    expect(prompt).toContain('Parent notes may include a line starting "Already tried:" with what the parent has tried.');
+    expect(prompt).not.toContain('**Try this first:**');
+    expect(prompt).not.toContain('Start with the most useful next action');
     expect(memoryQuery.eq).toHaveBeenCalledWith('child_profile_id', profile.id);
     expect(memoryQuery.limit).toHaveBeenCalledWith(12);
     expect(dependencies.supabase.rpc).toHaveBeenCalledWith('persist_assistant_message_with_memory_uses', {
@@ -464,7 +470,7 @@ describe('POST /api/chat', () => {
 
     expect(response.status).toBe(200);
     expect(dependencies.supabase.rpc).toHaveBeenCalledWith('persist_assistant_message_with_memory_uses', expect.objectContaining({
-      p_content: expect.stringContaining('local emergency number'),
+      p_content: 'I’m sorry you’re dealing with this. Cache can’t help with this safely. If anyone may be in danger right now, please call your local emergency number. In the US, you can also call or text 988.',
       p_memory_suggestion_eligible: false,
       p_used_memory_ids: [],
     }));
