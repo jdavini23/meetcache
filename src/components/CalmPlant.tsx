@@ -3,7 +3,6 @@ import { motion } from 'motion/react';
 export default function CalmPlant() {
   return (
     <div className="relative w-36 h-36 flex items-center justify-center select-none pointer-events-none">
-      {/* Glow behind the plant */}
       <div className="absolute w-20 h-20 bg-sage/10 rounded-full blur-xl animate-pulse" />
 
       <svg
@@ -12,7 +11,6 @@ export default function CalmPlant() {
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
       >
-        {/* Pot / Ground Line */}
         <motion.path
           d="M20 85C35 85 65 85 80 85"
           stroke="#2b2622"
@@ -23,7 +21,6 @@ export default function CalmPlant() {
           transition={{ duration: 1.5, ease: 'easeOut' }}
         />
 
-        {/* Stem - grows upwards and gently sways */}
         <motion.path
           d="M50 85C48 65 44 45 50 25"
           stroke="#6d7d63"
@@ -49,7 +46,6 @@ export default function CalmPlant() {
           }}
         />
 
-        {/* Left Leaf - sprouts and sways/pulses */}
         <motion.g
           initial={{ scale: 0, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
@@ -75,7 +71,6 @@ export default function CalmPlant() {
           />
         </motion.g>
 
-        {/* Right Leaf - terracotta warm sprout */}
         <motion.g
           initial={{ scale: 0, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
@@ -101,7 +96,6 @@ export default function CalmPlant() {
           />
         </motion.g>
 
-        {/* Tiny top leaf buds */}
         <motion.circle
           cx="50"
           cy="25"

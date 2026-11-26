@@ -7,7 +7,6 @@ export default function Hero() {
   const containerRef = useRef<HTMLDivElement>(null);
   const { scrollY } = useScroll();
 
-  // Scroll-responsive background shifts for abstract organic shapes
   const yShape1 = useTransform(scrollY, [0, 800], [0, -60]);
   const yShape2 = useTransform(scrollY, [0, 800], [0, 80]);
   const rotateShape = useTransform(scrollY, [0, 800], [0, 25]);

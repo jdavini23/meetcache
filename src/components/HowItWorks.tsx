@@ -46,7 +46,6 @@ export default function HowItWorks() {
       className="py-16 md:py-24 px-6 bg-cream relative border-b border-ink/10"
     >
       <div className="max-w-5xl mx-auto">
-        {/* Heading */}
         <motion.div 
           initial={{ opacity: 0, y: 15 }}
           whileInView={{ opacity: 1, y: 0 }}
@@ -78,7 +77,6 @@ export default function HowItWorks() {
           </div>
         </motion.div>
 
-        {/* Steps Grid */}
         <motion.div 
           id="how-it-works-steps-grid"
           variants={containerVariants}

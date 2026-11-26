@@ -7,7 +7,6 @@ export default function Footer() {
       className="bg-cream px-6 pb-16 mt-auto"
     >
       <div className="max-w-6xl mx-auto pt-10 border-t border-ink/10 flex flex-col sm:flex-row items-center justify-between gap-6">
-        {/* Wordmark logo */}
         <div 
           id="footer-logo"
           className="font-serif text-2xl font-bold tracking-tight text-ink cursor-pointer"
@@ -16,7 +15,6 @@ export default function Footer() {
           Cache<span className="text-terracotta">.</span>
         </div>
 
-        {/* Brand Tagline & Info */}
         <div 
           id="footer-tagline"
           className="font-sans text-[10px] uppercase tracking-widest text-ink/50 flex flex-col sm:flex-row items-center gap-3 sm:gap-6 text-center sm:text-left"
