@@ -1,5 +1,14 @@
 import request from 'supertest';
+import * as Sentry from '@sentry/node';
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@sentry/node', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@sentry/node')>();
+  return {
+    ...actual,
+    captureException: vi.fn(() => 'event-id'),
+  };
+});
 import {
   createApp,
   initServerSentry,
@@ -253,7 +262,10 @@ describe('POST /api/chat', () => {
     expect(dependencies.gemini.models.generateContent).toHaveBeenCalledWith(expect.objectContaining({
       model: 'test-model',
       contents: expect.stringContaining('Nickname: Milo'),
-      config: expect.objectContaining({ responseMimeType: 'application/json' }),
+      config: expect.objectContaining({
+        responseMimeType: 'application/json',
+        thinkingConfig: { thinkingLevel: 'LOW' },
+      }),
     }));
     const prompt = dependencies.gemini.models.generateContent.mock.calls[0][0].contents as string;
     expect(prompt).toContain('You are Cache, a calm, warm guide for parents of children ages 1 to 6.');
@@ -356,6 +368,70 @@ describe('POST /api/chat', () => {
     expect(response.status).toBe(500);
     expect(dependencies.supabase.rpc.mock.calls.some(([name]) => name === 'persist_assistant_message_with_memory_uses')).toBe(false);
     expect(failedStatusUpdate.update).toHaveBeenCalledWith({ response_status: 'failed' });
+  });
+
+  it('logs the provider error for a failed chat reply without prompt or child data', async () => {
+    const failedStatusUpdate = mockQuery({ data: null, error: null });
+    const dependencies = authenticatedDependencies([
+      mockQuery({ data: profile, error: null }),
+      mockQuery({ data: conversation, error: null }),
+      mockQuery({ data: null, error: null }),
+      mockQuery({ data: parentMessage, error: null }),
+      mockQuery({ data: [], error: null }),
+      mockQuery({ data: [approvedMemory], error: null }),
+      failedStatusUpdate,
+    ]);
+    let failure: Error = new Error('unset');
+    dependencies.gemini.models.generateContent.mockImplementation(async (input: { contents?: string }) => {
+      failure = new Error(`Model deadline exceeded. ${input.contents} Contact parent@example.com Bearer super-secret-token ${'x'.repeat(80)}`);
+      failure.name = 'ApiError';
+      Object.assign(failure, { status: 504, code: 'DEADLINE_EXCEEDED' });
+      throw failure;
+    });
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const captureException = vi.mocked(Sentry.captureException);
+    captureException.mockClear();
+    const app = createApp(dependencies as never);
+
+    try {
+      const response = await request(app).post('/api/chat')
+        .set('Authorization', 'Bearer secret-auth-token')
+        .send({ message: parentMessage.content, clientRequestId: parentMessage.client_request_id });
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe('Cache couldn\u2019t reply just now. Your message is still here. Try again.');
+      const logged = info.mock.calls.map(([line]) => String(line)).find((line) => line.includes('chat_request_failed'));
+      expect(logged).toBeTruthy();
+      const parsed = JSON.parse(logged as string);
+      expect(parsed).toMatchObject({
+        event: 'chat_request_failed',
+        requestId: response.body.requestId,
+        errorName: 'ApiError',
+        status: 504,
+        code: 'DEADLINE_EXCEEDED',
+      });
+      expect(parsed.errorMessage).toContain('Model deadline exceeded.');
+      expect(parsed.errorMessage.length).toBeLessThanOrEqual(300);
+      expect(parsed.errorMessage).not.toContain(parentMessage.content);
+      expect(parsed.errorMessage).not.toContain(profile.nickname);
+      expect(parsed.errorMessage).not.toContain(profile.routines);
+      expect(parsed.errorMessage).not.toContain(profile.challenges);
+      expect(parsed.errorMessage).not.toContain(approvedMemory.content);
+      expect(parsed.errorMessage).not.toContain('parent@example.com');
+      expect(parsed.errorMessage).not.toContain('super-secret-token');
+      expect(parsed.errorMessage).not.toContain('You are Cache');
+      expect(logged).not.toContain('secret-auth-token');
+      expect(logged).not.toContain(parentMessage.content);
+      expect(Object.keys(parsed).sort()).toEqual(['code', 'errorMessage', 'errorName', 'event', 'requestId', 'status']);
+      expect(captureException).toHaveBeenCalledWith(failure, {
+        tags: { event: 'chat_request_failed', requestId: response.body.requestId },
+      });
+      expect(dependencies.gemini.models.generateContent).toHaveBeenCalledWith(expect.objectContaining({
+        config: expect.objectContaining({ thinkingConfig: { thinkingLevel: 'LOW' } }),
+      }));
+    } finally {
+      info.mockRestore();
+    }
   });
 
   it('enforces the daily cost ceiling after the burst limit passes', async () => {
