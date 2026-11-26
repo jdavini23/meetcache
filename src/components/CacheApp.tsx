@@ -354,6 +354,7 @@ function AccountPanel({ exporting, deleting, deleteConfirmation, onExport, onDel
     <p className="app-eyebrow">Your account</p>
     <h2 className="mt-2 font-serif text-2xl">Data and privacy</h2>
     <p className="mt-3 text-sm leading-relaxed text-ink/70">Download your saved context and chat history, or permanently delete your Cache account and application data.</p>
+    <p className="mt-3 text-sm leading-relaxed text-ink/70">Questions? Email <a className="underline underline-offset-2 hover:text-ink" href="mailto:hello@meetcache.com">hello@meetcache.com</a>.</p>
     <button type="button" onClick={onExport} disabled={exporting || deleting} className="app-button mt-6">{exporting ? <Loader2 className="size-4 animate-spin" /> : null}{exporting ? 'Preparing download…' : 'Download my data'}</button>
     <div className="mt-8 border-t border-red-700/20 pt-6">
       <h3 className="font-serif text-xl text-red-800">Delete account</h3>
@@ -826,7 +827,7 @@ export default function CacheApp() {
     } catch (error) {
       setFailedChatRequest({ content, clientRequestId });
       const requestId = error instanceof ChatRequestError ? error.requestId : undefined;
-      setNotice(`${error instanceof Error ? error.message : 'Cache could not respond just now. Your message is still here. Please try again.'}${requestId ? `\nIf this keeps happening, send us this code: ${requestId}` : ''}`);
+      setNotice(`${error instanceof Error ? error.message : 'Cache could not respond just now. Your message is still here. Please try again.'}${requestId ? `\nIf this keeps happening, email hello@meetcache.com with this code: ${requestId}` : ''}`);
       return false;
     } finally { sendLock.current = false; setSending(false); }
   };
@@ -953,7 +954,7 @@ export default function CacheApp() {
       </section>
     </main>
   );
-  if (appState === 'onboarding') return <main className="app-shell min-h-dvh overflow-y-auto px-4 py-6 sm:px-6 sm:py-10"><section className="context-form-workspace mx-auto max-w-3xl"><div className="border-b border-ink/10 px-5 py-6 sm:px-8 sm:py-8"><p className="app-eyebrow">Getting started</p><h1 className="mt-3 max-w-xl font-serif text-4xl sm:text-5xl">Tell Cache about your child.</h1><p className="mt-3 max-w-2xl text-sm leading-relaxed text-ink/70 sm:text-base">This takes a few minutes. What you share here is what Cache uses so you never have to explain your child twice. You can change or delete it any time from Account.</p></div><div className="px-5 py-6 sm:px-8 sm:py-8"><ProfileForm onSave={completeProfile} /></div></section></main>;
+  if (appState === 'onboarding') return <main className="app-shell min-h-dvh overflow-y-auto px-4 py-6 sm:px-6 sm:py-10"><section className="context-form-workspace mx-auto max-w-3xl"><div className="border-b border-ink/10 px-5 py-6 sm:px-8 sm:py-8"><p className="app-eyebrow">Getting started</p><h1 className="mt-3 max-w-xl font-serif text-4xl sm:text-5xl">Tell Cache about your child.</h1><p className="mt-3 max-w-2xl text-sm leading-relaxed text-ink/70 sm:text-base">This takes a few minutes. What you share here is what Cache uses so you never have to explain your child twice. You can change or delete it any time from Account.</p></div><div className="px-5 py-6 sm:px-8 sm:py-8"><ProfileForm onSave={completeProfile} /><p className="mt-4 text-xs leading-relaxed text-ink/50">General parenting guidance only. For urgent or health concerns, contact a professional or emergency services.</p></div></section></main>;
   if (appState === 'deleted') return <main className="app-shell"><section className="app-card max-w-lg mx-auto mt-20"><h1 className="font-serif text-3xl">Your account is deleted.</h1><a href="/" className="inline-block mt-6 text-sm underline text-ink/60 hover:text-ink">Back to the home page</a></section></main>;
   if (appState === 'error') return <main className="app-shell"><section className="app-card max-w-lg mx-auto mt-20"><AlertCircle className="size-7 text-terracotta" /><h1 className="font-serif text-3xl mt-4">Something needs another try.</h1><p className="mt-3 text-ink/70">{notice}</p><button className="app-button mt-6" onClick={() => session && void loadAccount(session)}>Reload Cache</button></section></main>;
 
@@ -976,8 +977,8 @@ export default function CacheApp() {
               {profile && <span className="text-sm text-ink/60">{ageLabel(profile)}</span>}
             </div>
             <details className="mt-2 text-xs text-ink/60">
-              <summary className="flex w-fit cursor-pointer items-center gap-1.5 font-medium transition hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta"><Info className="size-3.5" />Guidance details</summary>
-              <p className="mt-2 max-w-xl leading-relaxed">Cache offers general parenting guidance, not medical, mental-health, or emergency care. If someone may be in immediate danger, Cache will pause normal coaching and direct you to urgent help.</p>
+              <summary className="flex w-fit cursor-pointer items-center gap-1.5 font-medium transition hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta"><Info className="size-3.5" />About this guidance</summary>
+              <p className="mt-2 max-w-xl leading-relaxed">Cache is an AI that offers general parenting guidance. It isn’t medical, mental health, or emergency care. If someone may be in danger right now, Cache will pause the chat and point you to urgent help.</p>
             </details>
             {profile && <button type="button" onClick={() => openContextDrawer(false)} className="mt-3 inline-flex items-center gap-2 rounded-full border border-sage/20 bg-sage/10 px-3 py-1.5 text-left text-xs font-semibold text-sage transition hover:bg-sage/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta lg:hidden">
               <span className="size-1.5 rounded-full bg-sage" /><span>Saved context · {profile.nickname}</span><ChevronUp className="size-3.5" />
@@ -1005,6 +1006,7 @@ export default function CacheApp() {
             <div className="min-w-0 flex-1"><textarea ref={messageInputRef} id="chat-message" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleComposerKeyDown} className="min-h-12 max-h-32 w-full resize-none bg-transparent px-2 py-2 text-sm text-ink outline-none placeholder:text-ink/45" placeholder={`What’s going on with ${profile?.nickname ?? ''}?`} maxLength={4000} required aria-describedby="chat-keyboard-help" /><p id="chat-keyboard-help" className="px-2 pb-0.5 text-[11px] text-ink/45">Enter to send <span aria-hidden="true">·</span> Shift+Enter for a new line</p></div>
             <button type="submit" disabled={sending || !draft.trim()} className="grid size-11 shrink-0 place-items-center rounded-xl bg-terracotta text-white transition hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta focus-visible:ring-offset-2" aria-label={sending ? 'Cache is thinking' : 'Send message'}>{sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}</button>
           </form>
+          <p className="mt-2 px-1 text-[11px] leading-relaxed text-ink/45">General parenting guidance only. For urgent or health concerns, contact a professional or emergency services.</p>
           </div>
         </section>
       </div>

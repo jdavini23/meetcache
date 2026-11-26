@@ -120,6 +120,7 @@ describe('CacheApp', () => {
     fireEvent.submit(nickname.closest('form')!);
 
     expect(await screen.findByText('A few things need a look. Check the fields marked below.')).toBeInTheDocument();
+    expect(screen.getByText('General parenting guidance only. For urgent or health concerns, contact a professional or emergency services.')).toBeInTheDocument();
     expect(screen.getByText('Choose a birth month and year.')).toBeInTheDocument();
     expect(nickname).toHaveValue('Milo');
     expect(screen.getByLabelText('Birth month')).toHaveFocus();
@@ -478,8 +479,14 @@ describe('CacheApp', () => {
     });
     render(<CacheApp />);
 
+    expect(await screen.findByText('About this guidance')).toBeInTheDocument();
+    expect(screen.getByText('Cache is an AI that offers general parenting guidance. It isn’t medical, mental health, or emergency care. If someone may be in danger right now, Cache will pause the chat and point you to urgent help.')).toBeInTheDocument();
+    expect(screen.getByText('General parenting guidance only. For urgent or health concerns, contact a professional or emergency services.')).toBeInTheDocument();
+
     await user.click(await screen.findByRole('button', { name: 'Account' }));
     const dialog = await screen.findByRole('dialog', { name: /your cache data/i });
+    expect(within(dialog).getByRole('link', { name: 'hello@meetcache.com' })).toHaveAttribute('href', 'mailto:hello@meetcache.com');
+    expect(dialog).toHaveTextContent('Questions? Email hello@meetcache.com.');
     await user.click(within(dialog).getByRole('button', { name: /download my data/i }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('Downloads aren’t available right now. Please try again in a little while.');
 
