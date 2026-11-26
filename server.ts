@@ -163,7 +163,7 @@ function serializeMemoryUses(rows: Array<{ child_memory_id: string | null; memor
 }
 
 function greetingResponse(nickname: string) {
-  return `Hi — I’m here to help you think things through with ${nickname}. What feels most challenging right now?`;
+  return `Hi. I’m here. What’s going on with ${nickname} today?`;
 }
 
 function savedContextResponse(profile: {
@@ -810,7 +810,7 @@ export function createApp({
     if (rateLimitError) throw rateLimitError;
     if (!rateLimitAllowed) {
       response.setHeader('Retry-After', String(rateLimitWindowSeconds));
-      return response.status(429).json({ error: 'Cache is receiving a lot of messages. Please wait a moment and try again.' });
+      return response.status(429).json({ error: 'Cache needs a short break.' });
     }
 
     const { data: dailyLimitAllowed, error: dailyLimitError } = await supabase.rpc('consume_daily_chat_quota', {
@@ -820,7 +820,7 @@ export function createApp({
     if (dailyLimitError) throw dailyLimitError;
     if (!dailyLimitAllowed) {
       response.setHeader('Retry-After', '3600');
-      return response.status(429).json({ error: 'Cache has reached today’s message limit. Please try again tomorrow.' });
+      return response.status(429).json({ error: 'You’ve reached today’s message limit. Cache will be ready again tomorrow.' });
     }
 
     if (existingChatResponse) {
@@ -972,7 +972,7 @@ export function createApp({
     }
     Sentry.captureException(error, { tags: { event: 'chat_request_failed' } });
     logEvent('chat_request_failed', response.locals.requestId);
-    return sendError(response, 500, 'Cache could not respond right now. Please try again.');
+    return sendError(response, 500, 'Cache couldn’t reply just now. Your message is still here. Try again.');
   }
   });
 

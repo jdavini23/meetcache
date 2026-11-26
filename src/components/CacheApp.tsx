@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode, RefObject } from 'react';
-import { AlertCircle, ArrowRight, ChevronDown, ChevronUp, Info, Loader2, Lock, LogOut, Mail, Pencil, Send, ShieldCheck, Sparkles, X } from 'lucide-react';
+import { AlertCircle, ArrowRight, ChevronDown, ChevronUp, Info, Loader2, Lock, LogOut, Mail, Pencil, Send, Sparkles, X } from 'lucide-react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { formatChildAge, isChildAgeSupported } from '../lib/childAge';
@@ -9,7 +9,7 @@ import ChatMarkdown from './ChatMarkdown';
 import MemoryManager from './MemoryManager';
 import WaitlistForm from './WaitlistForm';
 
-type AppState = 'loading' | 'signed-out' | 'onboarding' | 'ready' | 'error';
+type AppState = 'loading' | 'signed-out' | 'onboarding' | 'ready' | 'error' | 'deleted';
 
 interface FailedChatRequest {
   content: string;
@@ -32,11 +32,33 @@ function profileUpdatedLabel(updatedAt: string) {
 
 const currentYear = new Date().getFullYear();
 
-const starterPrompts = [
-  'Help me think through a tough moment.',
-  'What can I try when big feelings show up?',
-  'How can I make a transition feel easier?',
-];
+function starterPromptsFor(nickname: string) {
+  return [
+    `Help me think through a hard moment with ${nickname}.`,
+    `What can I try when ${nickname} has big feelings?`,
+    `How can I make a transition easier for ${nickname}?`,
+  ];
+}
+
+// Stored inside parent_notes so chat receives it on the existing parent-notes line.
+// A separate column would mean editing the system prompt text.
+const ALREADY_TRIED_HEADER = 'Already tried:\n';
+
+function composeParentNotes(alreadyTried: string, parentNotes: string) {
+  const tried = alreadyTried.trim();
+  const notes = parentNotes.trim();
+  if (!tried) return notes || null;
+  if (!notes) return `${ALREADY_TRIED_HEADER}${tried}`;
+  return `${ALREADY_TRIED_HEADER}${tried}\n\n${notes}`;
+}
+
+function splitParentNotes(stored: string | null | undefined) {
+  if (!stored?.startsWith(ALREADY_TRIED_HEADER)) return { alreadyTried: '', parentNotes: stored ?? '' };
+  const body = stored.slice(ALREADY_TRIED_HEADER.length);
+  const dividerAt = body.indexOf('\n\n');
+  if (dividerAt === -1) return { alreadyTried: body, parentNotes: '' };
+  return { alreadyTried: body.slice(0, dividerAt), parentNotes: body.slice(dividerAt + 2) };
+}
 
 const CHAT_POLL_INTERVAL_MS = 1_000;
 const CHAT_ATTEMPT_TIMEOUT_MS = 10_000;
@@ -115,6 +137,7 @@ interface ProfileValues {
   pronouns: string;
   routines: string;
   challenges: string;
+  alreadyTried: string;
   parentNotes: string;
 }
 
@@ -123,8 +146,14 @@ function validateProfile(values: ProfileValues): ProfileErrors {
   const month = Number(values.birthMonth);
   const year = Number(values.birthYear);
   if (!values.nickname.trim()) errors.nickname = 'Add the name you use for your child.';
-  if (!month || !year) errors.birthDate = 'Choose a birth month and year.';
-  else if (month < 1 || month > 12 || !isChildAgeSupported(month, year)) errors.birthDate = 'Cache currently supports children ages 1 through 6. Please check the birth month and year.';
+  if (!month || !year || month < 1 || month > 12) errors.birthDate = 'Choose a birth month and year.';
+  else if (!isChildAgeSupported(month, year)) {
+    const now = new Date();
+    const ageMonths = (now.getFullYear() - year) * 12 + (now.getMonth() + 1 - month);
+    errors.birthDate = ageMonths < 12
+      ? 'Cache is built for ages 1 through 6, so it isn’t ready for babies yet. If the birth month and year look wrong, you can fix them here.'
+      : 'Cache is built for ages 1 through 6, so it can’t help with this age yet. If the birth month and year look wrong, you can fix them here.';
+  }
   if (!values.routines.trim()) errors.routines = 'Share a little about your child’s usual routines.';
   if (!values.challenges.trim()) errors.challenges = 'Share what feels challenging right now.';
   return errors;
@@ -156,16 +185,18 @@ function CharacterCount({ current, maximum }: { current: number; maximum: number
 }
 
 function ProfileForm({ initialProfile, onSave, onCancel }: ProfileFormProps) {
+  const storedNotes = splitParentNotes(initialProfile?.parent_notes);
   const [values, setValues] = useState<ProfileValues>({
     nickname: initialProfile?.nickname ?? '', birthMonth: String(initialProfile?.birth_month ?? ''), birthYear: String(initialProfile?.birth_year ?? ''),
-    pronouns: initialProfile?.pronouns ?? '', routines: initialProfile?.routines ?? '', challenges: initialProfile?.challenges ?? '', parentNotes: initialProfile?.parent_notes ?? '',
+    pronouns: initialProfile?.pronouns ?? '', routines: initialProfile?.routines ?? '', challenges: initialProfile?.challenges ?? '',
+    alreadyTried: storedNotes.alreadyTried, parentNotes: storedNotes.parentNotes,
   });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [errors, setErrors] = useState<ProfileErrors>({});
   const [touched, setTouched] = useState<Partial<Record<ProfileField, boolean>>>({});
   const [submitted, setSubmitted] = useState(false);
-  const [optionalDetailsOpen, setOptionalDetailsOpen] = useState(Boolean(initialProfile?.pronouns || initialProfile?.parent_notes));
+  const [optionalDetailsOpen, setOptionalDetailsOpen] = useState(Boolean(initialProfile?.pronouns || storedNotes.parentNotes));
   const nicknameRef = useRef<HTMLInputElement>(null);
   const birthMonthRef = useRef<HTMLSelectElement>(null);
   const routinesRef = useRef<HTMLTextAreaElement>(null);
@@ -199,11 +230,16 @@ function ProfileForm({ initialProfile, onSave, onCancel }: ProfileFormProps) {
       return;
     }
 
+    const parentNotes = composeParentNotes(values.alreadyTried, values.parentNotes);
+    if (parentNotes && parentNotes.length > 2000) {
+      setSaveError('We couldn’t save that. Your answers are still here, so you can try again.');
+      return;
+    }
     setSaving(true);
     setSaveError('');
     const payload = {
       nickname: values.nickname.trim(), birth_month: Number(values.birthMonth), birth_year: Number(values.birthYear), pronouns: values.pronouns.trim() || null,
-      routines: values.routines.trim(), challenges: values.challenges.trim(), parent_notes: values.parentNotes.trim() || null,
+      routines: values.routines.trim(), challenges: values.challenges.trim(), parent_notes: parentNotes,
     };
     const request = initialProfile
       ? supabase.from('child_profiles').update(payload).eq('id', initialProfile.id).select().single()
@@ -211,7 +247,7 @@ function ProfileForm({ initialProfile, onSave, onCancel }: ProfileFormProps) {
     const { data, error: saveError } = await request;
     setSaving(false);
     if (saveError || !data) {
-      setSaveError('We could not save this context. Your answers are still here. Please try again.');
+      setSaveError('We couldn’t save that. Your answers are still here, so you can try again.');
       return;
     }
     onSave(data as ChildProfile);
@@ -219,25 +255,26 @@ function ProfileForm({ initialProfile, onSave, onCancel }: ProfileFormProps) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5" noValidate>
-      {submitted && Object.keys(errors).length > 0 && <div className="context-error-summary" role="alert"><AlertCircle className="mt-0.5 size-4 shrink-0" /><div><p className="font-semibold">A few details need your attention.</p><p className="mt-0.5">Please review the highlighted fields and try again.</p></div></div>}
-      <FormSection eyebrow="The essentials" title="About your child" description="A few basics help Cache keep the guidance relevant from the start.">
+      {submitted && Object.keys(errors).length > 0 && <div className="context-error-summary" role="alert"><AlertCircle className="mt-0.5 size-4 shrink-0" /><p>A few things need a look. Check the fields marked below.</p></div>}
+      <FormSection eyebrow="The essentials" title="About your child" description="A nickname is fine. Their age helps Cache suggest ideas that fit.">
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="context-form-label" htmlFor="profile-nickname">Child’s nickname <span aria-hidden="true" className="text-terracotta">*</span><input ref={nicknameRef} id="profile-nickname" value={values.nickname} onChange={(event) => updateValue('nickname', event.target.value)} onBlur={() => markTouched('nickname')} className="app-input mt-2" placeholder="Milo" maxLength={80} required aria-required="true" aria-invalid={Boolean(displayedError('nickname'))} aria-describedby={describedBy('profile-nickname-help', 'profile-nickname-error', displayedError('nickname'))} /><span id="profile-nickname-help" className="context-field-help">Use the name that feels natural at home.</span><FieldError id="profile-nickname-error" message={displayedError('nickname')} /></label>
-          <fieldset className="context-form-label" aria-describedby={describedBy('profile-birth-help', 'profile-birth-error', displayedError('birthDate'))}><legend>Birth month and year <span aria-hidden="true" className="text-terracotta">*</span></legend><div className="mt-2 grid grid-cols-2 gap-2"><label className="sr-only" htmlFor="profile-birth-month">Birth month</label><select ref={birthMonthRef} id="profile-birth-month" value={values.birthMonth} onChange={(event) => updateValue('birthMonth', event.target.value)} onBlur={() => markTouched('birthDate')} className="app-input" required aria-required="true" aria-invalid={Boolean(displayedError('birthDate'))}><option value="">Month</option>{Array.from({ length: 12 }, (_, index) => <option key={index + 1} value={index + 1}>{new Date(2000, index, 1).toLocaleString('en', { month: 'long' })}</option>)}</select><label className="sr-only" htmlFor="profile-birth-year">Birth year</label><select id="profile-birth-year" value={values.birthYear} onChange={(event) => updateValue('birthYear', event.target.value)} onBlur={() => markTouched('birthDate')} className="app-input" required aria-required="true" aria-invalid={Boolean(displayedError('birthDate'))}><option value="">Year</option>{Array.from({ length: 8 }, (_, index) => currentYear - index).map((year) => <option key={year} value={year}>{year}</option>)}</select></div><span id="profile-birth-help" className="context-field-help">Cache currently supports ages 1 through 6.</span><FieldError id="profile-birth-error" message={displayedError('birthDate')} /></fieldset>
+          <fieldset className="context-form-label" aria-describedby={describedBy('profile-birth-help', 'profile-birth-error', displayedError('birthDate'))}><legend>Birth month and year <span aria-hidden="true" className="text-terracotta">*</span></legend><div className="mt-2 grid grid-cols-2 gap-2"><label className="sr-only" htmlFor="profile-birth-month">Birth month</label><select ref={birthMonthRef} id="profile-birth-month" value={values.birthMonth} onChange={(event) => updateValue('birthMonth', event.target.value)} onBlur={() => markTouched('birthDate')} className="app-input" required aria-required="true" aria-invalid={Boolean(displayedError('birthDate'))}><option value="">Month</option>{Array.from({ length: 12 }, (_, index) => <option key={index + 1} value={index + 1}>{new Date(2000, index, 1).toLocaleString('en', { month: 'long' })}</option>)}</select><label className="sr-only" htmlFor="profile-birth-year">Birth year</label><select id="profile-birth-year" value={values.birthYear} onChange={(event) => updateValue('birthYear', event.target.value)} onBlur={() => markTouched('birthDate')} className="app-input" required aria-required="true" aria-invalid={Boolean(displayedError('birthDate'))}><option value="">Year</option>{Array.from({ length: 8 }, (_, index) => currentYear - index).map((year) => <option key={year} value={year}>{year}</option>)}</select></div><span id="profile-birth-help" className="context-field-help">Their age shapes the ideas Cache suggests. Cache is for ages 1 through 6 right now.</span><FieldError id="profile-birth-error" message={displayedError('birthDate')} /></fieldset>
         </div>
       </FormSection>
-      <FormSection eyebrow="Your day to day" title="What life looks like right now" description="A little context helps Cache offer ideas that fit your family, not generic advice.">
+      <FormSection eyebrow="Your day to day" title="What life looks like right now" description="The more Cache knows about an ordinary day, the better its ideas fit your family.">
         <div className="space-y-5">
           <label className="context-form-label block" htmlFor="profile-routines">What are their usual routines? <span aria-hidden="true" className="text-terracotta">*</span><textarea ref={routinesRef} id="profile-routines" value={values.routines} onChange={(event) => updateValue('routines', event.target.value)} onBlur={() => markTouched('routines')} className="app-input mt-2 min-h-28 resize-y" placeholder="Sleep, meals, preschool, transitions…" maxLength={1200} required aria-required="true" aria-invalid={Boolean(displayedError('routines'))} aria-describedby={describedBy('profile-routines-count', 'profile-routines-error', displayedError('routines'))} /><CharacterCount current={values.routines.length} maximum={1200} /><FieldError id="profile-routines-error" message={displayedError('routines')} /></label>
           <label className="context-form-label block" htmlFor="profile-challenges">What feels challenging right now? <span aria-hidden="true" className="text-terracotta">*</span><textarea ref={challengesRef} id="profile-challenges" value={values.challenges} onChange={(event) => updateValue('challenges', event.target.value)} onBlur={() => markTouched('challenges')} className="app-input mt-2 min-h-28 resize-y" placeholder="Bedtime, big feelings, separation…" maxLength={1200} required aria-required="true" aria-invalid={Boolean(displayedError('challenges'))} aria-describedby={describedBy('profile-challenges-count', 'profile-challenges-error', displayedError('challenges'))} /><CharacterCount current={values.challenges.length} maximum={1200} /><FieldError id="profile-challenges-error" message={displayedError('challenges')} /></label>
+          <label className="context-form-label block" htmlFor="profile-tried">What have you already tried?<textarea id="profile-tried" value={values.alreadyTried} onChange={(event) => updateValue('alreadyTried', event.target.value)} className="app-input mt-2 min-h-28 resize-y" placeholder="An earlier bedtime, a sticker chart, a timer…" maxLength={1200} aria-describedby="profile-tried-count" /><CharacterCount current={values.alreadyTried.length} maximum={1200} /></label>
         </div>
       </FormSection>
       <section className="context-optional-details">
-        <button type="button" className="flex w-full items-center justify-between gap-3 text-left" onClick={() => setOptionalDetailsOpen((open) => !open)} aria-expanded={optionalDetailsOpen} aria-controls="optional-profile-details"><span><span className="block text-sm font-semibold text-ink">Optional details</span><span className="mt-0.5 block text-sm text-ink/60">Add the little things that might help Cache understand.</span></span><ChevronDown className={`size-5 shrink-0 text-sage transition ${optionalDetailsOpen ? 'rotate-180' : ''}`} /></button>
-        {optionalDetailsOpen && <div id="optional-profile-details" className="mt-5 space-y-5 border-t border-ink/10 pt-5"><label className="context-form-label block" htmlFor="profile-pronouns">Pronouns <span className="font-normal text-ink/50">(optional)</span><input id="profile-pronouns" value={values.pronouns} onChange={(event) => updateValue('pronouns', event.target.value)} className="app-input mt-2" placeholder="they/them" maxLength={40} /><span className="context-field-help">Only if they are useful for how Cache refers to your child.</span></label><label className="context-form-label block" htmlFor="profile-notes">Anything else Cache should know? <span className="font-normal text-ink/50">(optional)</span><textarea id="profile-notes" value={values.parentNotes} onChange={(event) => updateValue('parentNotes', event.target.value)} className="app-input mt-2 min-h-28 resize-y" placeholder="What you have tried, temperament, family context…" maxLength={2000} aria-describedby="profile-notes-count" /><CharacterCount current={values.parentNotes.length} maximum={2000} /></label></div>}
+        <button type="button" className="flex w-full items-center justify-between gap-3 text-left" onClick={() => setOptionalDetailsOpen((open) => !open)} aria-expanded={optionalDetailsOpen} aria-controls="optional-profile-details"><span><span className="block text-sm font-semibold text-ink">Optional details</span><span className="mt-0.5 block text-sm text-ink/60">Anything else you’d like Cache to know.</span></span><ChevronDown className={`size-5 shrink-0 text-sage transition ${optionalDetailsOpen ? 'rotate-180' : ''}`} /></button>
+        {optionalDetailsOpen && <div id="optional-profile-details" className="mt-5 space-y-5 border-t border-ink/10 pt-5"><label className="context-form-label block" htmlFor="profile-pronouns">Pronouns <span className="font-normal text-ink/50">(optional)</span><input id="profile-pronouns" value={values.pronouns} onChange={(event) => updateValue('pronouns', event.target.value)} className="app-input mt-2" placeholder="they/them" maxLength={40} /><span className="context-field-help">Only if they are useful for how Cache refers to your child.</span></label><label className="context-form-label block" htmlFor="profile-notes">Anything else Cache should know? <span className="font-normal text-ink/50">(optional)</span><textarea id="profile-notes" value={values.parentNotes} onChange={(event) => updateValue('parentNotes', event.target.value)} className="app-input mt-2 min-h-28 resize-y" placeholder="Temperament, family context, anything else…" maxLength={2000} aria-describedby="profile-notes-count" /><CharacterCount current={values.parentNotes.length} maximum={2000} /></label></div>}
       </section>
       {saveError && <div className="context-error-summary" role="alert"><AlertCircle className="mt-0.5 size-4 shrink-0" /><span>{saveError}</span></div>}
-      <div className="context-form-actions"><div><button disabled={saving} className="app-button">{saving ? <Loader2 className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}{saving ? 'Saving context…' : initialProfile ? 'Save context' : 'Start with Cache'}</button>{onCancel && <button type="button" onClick={onCancel} disabled={saving} className="ml-1 rounded-xl px-4 py-3 text-sm font-semibold text-ink/70 transition hover:bg-ink/5 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta">Cancel</button>}</div><p className="mt-2 text-xs leading-relaxed text-ink/50">You can update this context whenever things change.</p></div>
+      <div className="context-form-actions"><div><button disabled={saving} className="app-button">{saving ? <Loader2 className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}{saving ? 'Saving context…' : initialProfile ? 'Save context' : 'Start with Cache'}</button>{onCancel && <button type="button" onClick={onCancel} disabled={saving} className="ml-1 rounded-xl px-4 py-3 text-sm font-semibold text-ink/70 transition hover:bg-ink/5 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta">Cancel</button>}</div><p className="mt-2 text-xs leading-relaxed text-ink/50">You can change any of this later.</p></div>
     </form>
   );
 }
@@ -423,6 +460,8 @@ export default function CacheApp() {
   const [exporting, setExporting] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState('');
+  const [accountNotice, setAccountNotice] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
+  const accountDeletedRef = useRef(false);
   const [failedChatRequest, setFailedChatRequest] = useState<FailedChatRequest | null>(null);
   const sendLock = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -442,6 +481,7 @@ export default function CacheApp() {
   const closeAccount = useCallback(() => {
     setAccountOpen(false);
     setDeleteConfirmation('');
+    setAccountNotice(null);
   }, []);
   const closeEditing = useCallback(() => setEditing(false), []);
 
@@ -613,7 +653,7 @@ export default function CacheApp() {
       && (message.response_status === 'pending' || message.response_status === 'failed'));
     if (incompleteMessage?.client_request_id) {
       setFailedChatRequest({ content: incompleteMessage.content, clientRequestId: incompleteMessage.client_request_id });
-      setNotice('Cache still has an unfinished response. You can safely try again without sending your message twice.');
+      setNotice('Cache didn’t finish replying to your last message. Tap Try again. It won’t be sent twice.');
     }
     setAppState('ready');
   };
@@ -625,7 +665,11 @@ export default function CacheApp() {
     });
     const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
-      if (nextSession) void loadAccount(nextSession); else { setProfile(null); setMessages([]); setMemorySuggestions({}); setMemories([]); setAppState('signed-out'); }
+      if (nextSession) void loadAccount(nextSession);
+      else {
+        setProfile(null); setMessages([]); setMemorySuggestions({}); setMemories([]);
+        setAppState(accountDeletedRef.current ? 'deleted' : 'signed-out');
+      }
     });
     return () => listener.subscription.unsubscribe();
   }, []);
@@ -688,7 +732,7 @@ export default function CacheApp() {
         try {
           body = await response.json() as typeof body;
         } catch {
-          throw new ChatRequestError('Cache returned an unexpected response. Please try again.', lastRequestId);
+          throw new ChatRequestError('Something went wrong on our end. Your message is still here. Try again.', lastRequestId);
         }
       }
 
@@ -698,17 +742,19 @@ export default function CacheApp() {
       }
       if (response.status === 429) {
         const retryAfter = Number(response.headers.get('Retry-After'));
-        const readableDelay = Number.isFinite(retryAfter) && retryAfter > 0
-          ? ` Please wait about ${retryAfter >= 60 ? `${Math.ceil(retryAfter / 60)} minute${retryAfter >= 120 ? 's' : ''}` : `${retryAfter} seconds`} before trying again.`
+        const serverMessage = body.error ?? 'Cache needs a short pause.';
+        const minutes = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.ceil(retryAfter / 60) : 0;
+        const readableDelay = !/tomorrow/i.test(serverMessage) && minutes > 0
+          ? ` Try again in about ${minutes} minute${minutes === 1 ? '' : 's'}.`
           : '';
-        throw new ChatRequestError(`${body.error ?? 'Cache needs a short pause.'}${readableDelay}`, lastRequestId);
+        throw new ChatRequestError(`${serverMessage}${readableDelay}`, lastRequestId);
       }
       if (!response.ok || !body.message || !body.parentMessage) {
         throw new ChatRequestError(body.error ?? 'Cache could not respond right now. Please try again.', lastRequestId);
       }
       return body;
     }
-    throw new ChatRequestError('Cache is still preparing this response. Please try again; your message will not be sent twice.', lastRequestId);
+    throw new ChatRequestError('This is taking longer than usual. Tap Try again. Your message won’t be sent twice.', lastRequestId);
   };
 
   const requestMemorySuggestions = async (assistantMessageId: string) => {
@@ -780,7 +826,7 @@ export default function CacheApp() {
     } catch (error) {
       setFailedChatRequest({ content, clientRequestId });
       const requestId = error instanceof ChatRequestError ? error.requestId : undefined;
-      setNotice(`${error instanceof Error ? error.message : 'Cache could not respond just now. Your message is still here. Please try again.'}${requestId ? `\nReference: ${requestId}` : ''}`);
+      setNotice(`${error instanceof Error ? error.message : 'Cache could not respond just now. Your message is still here. Please try again.'}${requestId ? `\nIf this keeps happening, send us this code: ${requestId}` : ''}`);
       return false;
     } finally { sendLock.current = false; setSending(false); }
   };
@@ -788,11 +834,11 @@ export default function CacheApp() {
   const downloadData = async () => {
     if (!session || exporting || deleting) return;
     setExporting(true);
-    setNotice('');
+    setAccountNotice(null);
     try {
       const response = await fetch('/api/account/export', { headers: { Authorization: `Bearer ${session.access_token}` } });
       if (response.status === 404) {
-        throw new Error('This Cache server needs to be restarted or redeployed before data downloads are available.');
+        throw new Error('Downloads aren’t available right now. Please try again in a little while.');
       }
       if (!response.ok) throw new Error('Cache could not prepare your download right now.');
       const blob = await response.blob();
@@ -802,9 +848,9 @@ export default function CacheApp() {
       link.download = 'cache-data-export.json';
       link.click();
       URL.revokeObjectURL(url);
-      setNotice('Your Cache data download is ready.');
+      setAccountNotice({ tone: 'success', message: 'Your Cache data download is ready.' });
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Cache could not prepare your download right now.');
+      setAccountNotice({ tone: 'error', message: error instanceof Error ? error.message : 'Cache could not prepare your download right now.' });
     } finally {
       setExporting(false);
     }
@@ -813,17 +859,24 @@ export default function CacheApp() {
   const deleteAccount = async () => {
     if (!session || deleteConfirmation !== 'DELETE' || deleting) return;
     setDeleting(true);
-    setNotice('');
+    setAccountNotice(null);
     try {
       const response = await fetch('/api/account', { method: 'DELETE', headers: { Authorization: `Bearer ${session.access_token}` } });
       if (response.status === 404) {
-        throw new Error('This Cache server needs to be restarted or redeployed before account deletion is available.');
+        throw new Error('Account deletion isn’t available right now. Please try again in a little while.');
       }
       if (!response.ok) throw new Error('Cache could not delete your account right now.');
-      await supabase.auth.signOut({ scope: 'local' });
-      window.location.assign('/');
+      accountDeletedRef.current = true;
+      try {
+        await supabase.auth.signOut({ scope: 'local' });
+      } catch {
+        // The account is already deleted. Still show the confirmation screen.
+      }
+      setAccountOpen(false);
+      setDeleting(false);
+      setAppState('deleted');
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Cache could not delete your account right now.');
+      setAccountNotice({ tone: 'error', message: error instanceof Error ? error.message : 'Cache could not delete your account right now.' });
       setDeleting(false);
     }
   };
@@ -900,7 +953,8 @@ export default function CacheApp() {
       </section>
     </main>
   );
-  if (appState === 'onboarding') return <main className="app-shell min-h-dvh overflow-y-auto px-4 py-6 sm:px-6 sm:py-10"><section className="context-form-workspace mx-auto max-w-3xl"><div className="border-b border-ink/10 px-5 py-6 sm:px-8 sm:py-8"><p className="app-eyebrow">A little context</p><h1 className="mt-3 max-w-xl font-serif text-4xl sm:text-5xl">Tell Cache about your child.</h1><p className="mt-3 max-w-2xl text-sm leading-relaxed text-ink/70 sm:text-base">This takes just a few minutes and helps Cache offer practical, relevant ideas from your very first conversation.</p></div><div className="px-5 py-6 sm:px-8 sm:py-8"><ProfileForm onSave={completeProfile} /></div></section></main>;
+  if (appState === 'onboarding') return <main className="app-shell min-h-dvh overflow-y-auto px-4 py-6 sm:px-6 sm:py-10"><section className="context-form-workspace mx-auto max-w-3xl"><div className="border-b border-ink/10 px-5 py-6 sm:px-8 sm:py-8"><p className="app-eyebrow">Getting started</p><h1 className="mt-3 max-w-xl font-serif text-4xl sm:text-5xl">Tell Cache about your child.</h1><p className="mt-3 max-w-2xl text-sm leading-relaxed text-ink/70 sm:text-base">This takes a few minutes. What you share here is what Cache uses so you never have to explain your child twice. You can change or delete it any time from Account.</p></div><div className="px-5 py-6 sm:px-8 sm:py-8"><ProfileForm onSave={completeProfile} /></div></section></main>;
+  if (appState === 'deleted') return <main className="app-shell"><section className="app-card max-w-lg mx-auto mt-20"><h1 className="font-serif text-3xl">Your account is deleted.</h1><a href="/" className="inline-block mt-6 text-sm underline text-ink/60 hover:text-ink">Back to the home page</a></section></main>;
   if (appState === 'error') return <main className="app-shell"><section className="app-card max-w-lg mx-auto mt-20"><AlertCircle className="size-7 text-terracotta" /><h1 className="font-serif text-3xl mt-4">Something needs another try.</h1><p className="mt-3 text-ink/70">{notice}</p><button className="app-button mt-6" onClick={() => session && void loadAccount(session)}>Reload Cache</button></section></main>;
 
   return (
@@ -931,11 +985,11 @@ export default function CacheApp() {
           </div>
           <div ref={messagesListRef} onScroll={updateMessageScrollPosition} className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-5 py-5 sm:px-7 sm:py-7" aria-live="polite">
             {!hasMessages && <div className="max-w-2xl py-2 sm:py-5">
-              <p className="max-w-xl text-sm leading-relaxed text-ink/70 sm:text-base">Share what happened, what you have already tried, and what you would like to feel easier. You do not have to find the perfect words.</p>
+              <p className="max-w-xl text-sm leading-relaxed text-ink/70 sm:text-base">Cache already has what you shared about {profile?.nickname}, so you can start in the middle of things. Say what happened, what you’ve already tried, and what you’d like to feel easier. Rough words are fine.</p>
               <div className="mt-6">
-                <p className="flex items-center gap-2 text-sm font-semibold text-ink"><ShieldCheck className="size-4 text-sage" />A place to begin</p>
+                <p className="text-sm font-semibold text-ink">Ways to start</p>
                 <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                  {starterPrompts.map((prompt) => <button key={prompt} type="button" onClick={() => useStarterPrompt(prompt)} className="rounded-2xl border border-ink/10 bg-cream px-3.5 py-3.5 text-left text-sm leading-snug text-ink/75 transition hover:border-sage/40 hover:bg-sage/10 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta">{prompt}</button>)}
+                  {starterPromptsFor(profile?.nickname ?? '').map((prompt) => <button key={prompt} type="button" onClick={() => useStarterPrompt(prompt)} className="rounded-2xl border border-ink/10 bg-cream px-3.5 py-3.5 text-left text-sm leading-snug text-ink/75 transition hover:border-sage/40 hover:bg-sage/10 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta">{prompt}</button>)}
                 </div>
               </div>
             </div>}
@@ -948,7 +1002,7 @@ export default function CacheApp() {
             {notice && <div className="mb-3 flex items-start justify-between gap-3 rounded-xl border border-red-700/15 bg-red-50 px-3 py-2.5 text-sm text-red-800" role="alert"><span className="whitespace-pre-line">{notice}</span>{failedChatRequest && <button type="button" onClick={() => void sendChatMessage(failedChatRequest.content, failedChatRequest.clientRequestId, false)} className="shrink-0 font-semibold underline underline-offset-2">Try again</button>}</div>}
           <form onSubmit={sendMessage} className="chat-composer flex shrink-0 items-end gap-3 rounded-2xl border border-ink/10 bg-cream p-2 transition focus-within:border-terracotta/40 focus-within:ring-2 focus-within:ring-terracotta/20">
             <label className="sr-only" htmlFor="chat-message">Message Cache</label>
-            <div className="min-w-0 flex-1"><textarea ref={messageInputRef} id="chat-message" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleComposerKeyDown} className="min-h-12 max-h-32 w-full resize-none bg-transparent px-2 py-2 text-sm text-ink outline-none placeholder:text-ink/45" placeholder="What is on your mind?" maxLength={4000} required aria-describedby="chat-keyboard-help" /><p id="chat-keyboard-help" className="px-2 pb-0.5 text-[11px] text-ink/45">Enter to send <span aria-hidden="true">·</span> Shift+Enter for a new line</p></div>
+            <div className="min-w-0 flex-1"><textarea ref={messageInputRef} id="chat-message" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleComposerKeyDown} className="min-h-12 max-h-32 w-full resize-none bg-transparent px-2 py-2 text-sm text-ink outline-none placeholder:text-ink/45" placeholder={`What’s going on with ${profile?.nickname ?? ''}?`} maxLength={4000} required aria-describedby="chat-keyboard-help" /><p id="chat-keyboard-help" className="px-2 pb-0.5 text-[11px] text-ink/45">Enter to send <span aria-hidden="true">·</span> Shift+Enter for a new line</p></div>
             <button type="submit" disabled={sending || !draft.trim()} className="grid size-11 shrink-0 place-items-center rounded-xl bg-terracotta text-white transition hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta focus-visible:ring-offset-2" aria-label={sending ? 'Cache is thinking' : 'Send message'}>{sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}</button>
           </form>
           </div>
@@ -962,7 +1016,7 @@ export default function CacheApp() {
         </section>
       </div>}
       {editing && profile && <div className="fixed inset-0 z-40 grid place-items-center bg-ink/35 p-4" role="presentation"><section ref={editDialogRef} className="context-form-workspace flex max-h-[calc(100dvh-2rem)] w-full max-w-3xl flex-col" role="dialog" aria-modal="true" aria-labelledby="edit-context-title"><div className="flex shrink-0 items-start justify-between gap-5 border-b border-ink/10 px-5 py-5 sm:px-8 sm:py-6"><div><p className="app-eyebrow">Saved context</p><h2 id="edit-context-title" className="mt-2 font-serif text-3xl">Update {profile.nickname}’s context</h2><p className="mt-2 text-sm leading-relaxed text-ink/65">Keep the details that help Cache support your family up to date.</p></div><button ref={editCloseButtonRef} type="button" onClick={closeEditing} className="rounded-lg p-2 text-ink/60 transition hover:bg-ink/5 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta" aria-label="Close context editor"><X className="size-5" /></button></div><div className="min-h-0 overflow-y-auto px-5 py-6 sm:px-8 sm:py-8"><ProfileForm initialProfile={profile} onSave={(saved) => { setProfile(saved); closeEditing(); }} onCancel={closeEditing} /></div></section></div>}
-      {accountOpen && <div className="fixed inset-0 z-40 overflow-y-auto bg-ink/35 p-4" role="presentation"><section ref={accountDialogRef} className="app-card mx-auto my-8 max-w-xl" role="dialog" aria-modal="true" aria-labelledby="account-dialog-title"><div className="flex items-start justify-between gap-4"><div><p className="app-eyebrow">Account settings</p><h2 id="account-dialog-title" className="mt-2 font-serif text-3xl">Your Cache data</h2></div><button ref={accountCloseButtonRef} type="button" onClick={closeAccount} className="rounded-lg p-2 text-ink/60 hover:bg-ink/5 hover:text-ink" aria-label="Close account settings"><X className="size-5" /></button></div><div className="mt-6"><AccountPanel exporting={exporting} deleting={deleting} deleteConfirmation={deleteConfirmation} onExport={() => void downloadData()} onDeleteConfirmationChange={setDeleteConfirmation} onDelete={() => void deleteAccount()} /></div></section></div>}
+      {accountOpen && <div className="fixed inset-0 z-40 overflow-y-auto bg-ink/35 p-4" role="presentation"><section ref={accountDialogRef} className="app-card mx-auto my-8 max-w-xl" role="dialog" aria-modal="true" aria-labelledby="account-dialog-title"><div className="flex items-start justify-between gap-4"><div><p className="app-eyebrow">Account settings</p><h2 id="account-dialog-title" className="mt-2 font-serif text-3xl">Your Cache data</h2></div><button ref={accountCloseButtonRef} type="button" onClick={closeAccount} className="rounded-lg p-2 text-ink/60 hover:bg-ink/5 hover:text-ink" aria-label="Close account settings"><X className="size-5" /></button></div><div className="mt-6">{accountNotice && <div role={accountNotice.tone === 'error' ? 'alert' : 'status'} className={accountNotice.tone === 'error' ? 'context-error-summary mb-4' : 'mb-4 flex items-start gap-3 rounded-2xl border border-sage/25 bg-sage/10 p-4 text-sm text-ink'}>{accountNotice.tone === 'error' && <AlertCircle className="mt-0.5 size-4 shrink-0" />}<span>{accountNotice.message}</span></div>}<AccountPanel exporting={exporting} deleting={deleting} deleteConfirmation={deleteConfirmation} onExport={() => void downloadData()} onDeleteConfirmationChange={setDeleteConfirmation} onDelete={() => void deleteAccount()} /></div></section></div>}
     </main>
   );
 }

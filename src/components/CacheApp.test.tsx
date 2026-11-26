@@ -119,7 +119,7 @@ describe('CacheApp', () => {
     fireEvent.change(nickname, { target: { value: 'Milo' } });
     fireEvent.submit(nickname.closest('form')!);
 
-    expect(await screen.findByText('A few details need your attention.')).toBeInTheDocument();
+    expect(await screen.findByText('A few things need a look. Check the fields marked below.')).toBeInTheDocument();
     expect(screen.getByText('Choose a birth month and year.')).toBeInTheDocument();
     expect(nickname).toHaveValue('Milo');
     expect(screen.getByLabelText('Birth month')).toHaveFocus();
@@ -134,6 +134,7 @@ describe('CacheApp', () => {
 
     const optionalDetails = await screen.findByRole('button', { name: /optional details/i });
     expect(optionalDetails).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByLabelText(/what have you already tried/i)).toBeInTheDocument();
     expect(screen.queryByLabelText(/pronouns/i)).not.toBeInTheDocument();
 
     await user.click(optionalDetails);
@@ -211,13 +212,13 @@ describe('CacheApp', () => {
     });
     render(<CacheApp />);
 
-    await user.click(await screen.findByRole('button', { name: 'Help me think through a tough moment.' }));
+    await user.click(await screen.findByRole('button', { name: 'Help me think through a hard moment with Milo.' }));
     const input = screen.getByLabelText('Message Cache');
     expect(input).toHaveFocus();
-    expect(input).toHaveValue('Help me think through a tough moment.');
+    expect(input).toHaveValue('Help me think through a hard moment with Milo.');
 
     await user.keyboard('{Shift>}{Enter}{/Shift}One more detail');
-    expect(input).toHaveValue('Help me think through a tough moment.\nOne more detail');
+    expect(input).toHaveValue('Help me think through a hard moment with Milo.\nOne more detail');
   });
 
   it('shows persisted memory suggestions below the related Cache reply and dismisses one explicitly', async () => {
@@ -298,10 +299,10 @@ describe('CacheApp', () => {
       .map(([, options]) => JSON.parse((options as RequestInit).body as string));
 
     const first = render(<CacheApp />);
-    await screen.findByPlaceholderText('What is on your mind?');
+    await screen.findByPlaceholderText('What’s going on with Milo?');
     first.unmount();
     render(<CacheApp />);
-    await screen.findByPlaceholderText('What is on your mind?');
+    await screen.findByPlaceholderText('What’s going on with Milo?');
 
     const bodies = sessionEventBodies();
     expect(bodies).toHaveLength(2);
@@ -374,8 +375,121 @@ describe('CacheApp', () => {
     expect(pendingRequests.length).toBeGreaterThan(1);
     expect(pendingRequests[0].signal?.aborted).toBe(true);
     expect(pendingRequests.every((request) => JSON.parse(request.body as string).clientRequestId === 'f8b67515-5e62-4a65-b7c7-69b7d7c1b471')).toBe(true);
-    expect(screen.getByText(/cache is still preparing this response/i)).toBeInTheDocument();
+    expect(screen.getByText(/this is taking longer than usual/i)).toBeInTheDocument();
   });
+
+  it('splits an age outside 1 through 6 into too young and too old', async () => {
+    getSession.mockResolvedValue({ data: { session: { access_token: 'token', user: { id: 'user-1' } } } });
+    from.mockReturnValue({ select: vi.fn(() => ({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) })) });
+    render(<CacheApp />);
+
+    fireEvent.change(await screen.findByPlaceholderText('Milo'), { target: { value: 'Milo' } });
+    fireEvent.change(screen.getByLabelText('Birth month'), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText('Birth year'), { target: { value: String(new Date().getFullYear()) } });
+    fireEvent.submit(screen.getByPlaceholderText('Milo').closest('form')!);
+    expect(await screen.findByText(/isn’t ready for babies yet/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Birth month'), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText('Birth year'), { target: { value: String(new Date().getFullYear() - 7) } });
+    fireEvent.submit(screen.getByPlaceholderText('Milo').closest('form')!);
+    expect(await screen.findByText(/can’t help with this age yet/)).toBeInTheDocument();
+  });
+
+  it('saves what a parent has already tried inside other notes, and restores it in the editor', async () => {
+    const user = userEvent.setup();
+    const inserted = vi.fn();
+    getSession.mockResolvedValue({ data: { session: { access_token: 'token', user: { id: 'user-1' } } } });
+    const storedProfile = {
+      ...savedProfile,
+      parent_notes: 'Already tried:\nA sticker chart\n\nLoves trucks',
+    };
+    from.mockImplementation((table: string) => {
+      if (table !== 'child_profiles') {
+        const conversation = queryResult({ id: 'conversation-1', child_profile_id: 'profile-1', user_id: 'user-1' });
+        conversation.insert = vi.fn(() => conversation);
+        return table === 'conversations' ? conversation : queryResult([]);
+      }
+      return {
+        select: vi.fn(() => ({ maybeSingle: vi.fn().mockResolvedValue({ data: storedProfile, error: null }) })),
+        update: vi.fn((payload: unknown) => {
+          inserted(payload);
+          return { eq: vi.fn(() => ({ select: vi.fn(() => ({ single: vi.fn().mockResolvedValue({ data: { ...storedProfile, ...(payload as object) }, error: null }) })) })) };
+        }),
+      };
+    });
+    render(<CacheApp />);
+
+    await user.click(await screen.findByRole('button', { name: /edit saved context/i }));
+    const tried = screen.getByLabelText(/what have you already tried/i);
+    expect(tried).toHaveValue('A sticker chart');
+    expect(screen.getByLabelText(/anything else cache should know/i)).toHaveValue('Loves trucks');
+    await user.clear(tried);
+    await user.type(tried, 'An earlier bedtime');
+    await user.click(screen.getByRole('button', { name: 'Save context' }));
+
+    expect(inserted).toHaveBeenCalledWith(expect.objectContaining({
+      parent_notes: 'Already tried:\nAn earlier bedtime\n\nLoves trucks',
+    }));
+  });
+
+  it('adds a minute wait to a short break and leaves the daily limit without one', async () => {
+    vi.stubGlobal('crypto', { randomUUID: vi.fn(() => 'f8b67515-5e62-4a65-b7c7-69b7d7c1b471') });
+    const responses = [
+      new Response(JSON.stringify({ error: 'Cache needs a short break.' }), { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': '120' } }),
+      new Response(JSON.stringify({ error: 'You’ve reached today’s message limit. Cache will be ready again tomorrow.' }), { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': '3600' } }),
+    ];
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url === '/api/chat') return Promise.resolve(responses.shift() ?? responses[0]);
+      return Promise.resolve(new Response(JSON.stringify({ suggestions: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    }));
+    getSession.mockResolvedValue({ data: { session: { access_token: 'token', user: { id: 'user-1' } } } });
+    from.mockImplementation((table: string) => {
+      if (table === 'child_profiles') return queryResult(savedProfile);
+      if (table === 'conversations') return queryResult({ id: 'conversation-1', child_profile_id: 'profile-1', user_id: 'user-1' });
+      return queryResult([]);
+    });
+    render(<CacheApp />);
+
+    const input = await screen.findByLabelText('Message Cache');
+    fireEvent.change(input, { target: { value: 'What should I try?' } });
+    fireEvent.submit(input.closest('form')!);
+    expect(await screen.findByText('Cache needs a short break. Try again in about 2 minutes.')).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: 'What should I try next?' } });
+    fireEvent.submit(input.closest('form')!);
+    expect(await screen.findByText('You’ve reached today’s message limit. Cache will be ready again tomorrow.')).toBeInTheDocument();
+    expect(screen.queryByText(/about 60 minutes/)).not.toBeInTheDocument();
+  });
+
+  it('shows download and delete results in account settings, then confirms deletion', async () => {
+    const user = userEvent.setup();
+    signOut.mockResolvedValue({ error: null });
+    vi.stubGlobal('fetch', vi.fn((url: string, options?: RequestInit) => {
+      if (url === '/api/account/export') return Promise.resolve(new Response(null, { status: 404 }));
+      if (url === '/api/account' && options?.method === 'DELETE') return Promise.resolve(new Response(null, { status: 200 }));
+      if (url === '/api/product-events') return Promise.resolve(new Response(null, { status: 204 }));
+      return Promise.resolve(new Response(JSON.stringify({ memories: [], limit: 12, suggestions: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    }));
+    getSession.mockResolvedValue({ data: { session: { access_token: 'token', user: { id: 'user-1' } } } });
+    from.mockImplementation((table: string) => {
+      if (table === 'child_profiles') return queryResult(savedProfile);
+      if (table === 'conversations') return queryResult({ id: 'conversation-1', child_profile_id: 'profile-1', user_id: 'user-1' });
+      return queryResult([]);
+    });
+    render(<CacheApp />);
+
+    await user.click(await screen.findByRole('button', { name: 'Account' }));
+    const dialog = await screen.findByRole('dialog', { name: /your cache data/i });
+    await user.click(within(dialog).getByRole('button', { name: /download my data/i }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Downloads aren’t available right now. Please try again in a little while.');
+
+    await user.type(within(dialog).getByLabelText('Type DELETE to confirm'), 'DELETE');
+    await user.click(within(dialog).getByRole('button', { name: /delete my account and data/i }));
+    expect(await screen.findByRole('heading', { name: 'Your account is deleted.' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to the home page' })).toHaveAttribute('href', '/');
+    expect(signOut).toHaveBeenCalledWith({ scope: 'local' });
+  });
+
   describe('saved memory management', () => {
     const savedMemory = (id: string, content: string, memory_type = 'helps') => ({
       id, child_profile_id: 'profile-1', memory_type, content, parent_action: 'accepted',
