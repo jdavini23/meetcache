@@ -87,8 +87,8 @@ Final CTA: dark conversion card + email form
 Footer
 ```
 
-Keep the story in this order: acknowledge the pain, demonstrate the product,
-explain the model, then reinforce the differentiator before the final request.
+Keep the story in this order: demonstrate the product, explain the model,
+then make the final request.
 
 ## Component guidance
 
