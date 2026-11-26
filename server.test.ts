@@ -470,7 +470,7 @@ describe('POST /api/chat', () => {
 
     expect(response.status).toBe(200);
     expect(dependencies.supabase.rpc).toHaveBeenCalledWith('persist_assistant_message_with_memory_uses', expect.objectContaining({
-      p_content: expect.stringContaining('local emergency number'),
+      p_content: 'I’m sorry you’re dealing with this. Cache can’t help with this safely. If anyone may be in danger right now, please call your local emergency number. In the US, you can also call or text 988.',
       p_memory_suggestion_eligible: false,
       p_used_memory_ids: [],
     }));

@@ -4,6 +4,8 @@ const SAFETY_PATTERNS: Array<[Exclude<SafetyCategory, 'none'>, RegExp]> = [
   ['emergency', /\b(not breathing|can'?t breathe|trouble breathing|blue (?:lips|face)|unconscious|passed out|seizure|overdose|poison(?:ed|ing)?|swallowed (?:a |the )?(?:pill|(?:button )?battery|magnet)|choking|won'?t wake(?: up)?|barely responsive)\b/i],
   ['self_or_other_harm', /\b(suicid(?:e|al)|self[ -]?harm|kill myself|want to die|(?:(?:want|going|plan) to|(?:might|could)) (?:hurt|harm) (?:myself|someone(?: else)?|another person)|cut(?:ting)? myself)\b/i],
   ['self_or_other_harm', /\bi(?:['’]m| am)? (?:going to|(?:might|could|may|will)|(?:want|plan) to) (?:hurt|harm) (?:my (?:son|daughter|child|kid|baby)|him|her|them)(?!(?:['’]s?)?\s+feelings)\b/i],
+  ['self_or_other_harm', /\bi (?:hurt|hit) my (?:son|daughter|child|kid|baby)\b(?!(?:['’]s?)?\s+feelings)/i],
+  ['self_or_other_harm', /^(?=[\s\S]*\bmy (?:son|daughter|child|kid|baby|toddler)\b)(?=[\s\S]*\bi (?:hurt|hit) (?:him|her|them)\b(?!\s+feelings)(?!(?:\s+\w+){0,6}\s+(?:pillow|game|playing|play)\b))/i],
   ['abuse_or_unsafe_home', /\b(abuse(?:d)?|unsafe at home|being hurt at home|someone is hurting (?:me|my child)|afraid to go home)\b/i],
 ];
 
@@ -26,7 +28,7 @@ export function urgentSafetyResponse(category: Exclude<SafetyCategory, 'none'>) 
 
 // A generated reply can fail the directive check without matching one parent-message category.
 export function unclassifiedUrgentSafetyResponse() {
-  return 'I’m sorry you’re dealing with this. Because this could involve an immediate safety or health risk, I can’t assess it here. Please contact your local emergency number or go to the nearest emergency department now. If you can do so safely, stay with the person and seek help from a trusted adult or professional nearby.';
+  return 'I’m sorry you’re dealing with this. Cache can’t help with this safely. If anyone may be in danger right now, please call your local emergency number. In the US, you can also call or text 988.';
 }
 
 export function hasUnsafeEmergencyDirective(content: string) {
