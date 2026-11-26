@@ -5,6 +5,10 @@
   "functions": {
     "api/index.ts": { "maxDuration": 60 }
   },
+  "headers": [
+    { "source": "/app", "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }] },
+    { "source": "/app/(.*)", "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }] }
+  ],
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api" },
     { "source": "/healthz", "destination": "/api" },

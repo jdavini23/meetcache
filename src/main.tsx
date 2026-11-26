@@ -3,6 +3,9 @@ import {createRoot} from 'react-dom/client';
 import * as Sentry from '@sentry/react';
 import App from './App.tsx';
 import './index.css';
+import { applyPageMeta } from './lib/seo';
+
+applyPageMeta();
 
 const sentryDsn = import.meta.env.VITE_SENTRY_DSN;
 if (sentryDsn) {
