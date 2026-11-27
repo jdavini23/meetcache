@@ -22,7 +22,7 @@ export default function Footer() {
           <span>Made for parents</span>
           <span className="hidden sm:inline text-ink/20">•</span>
           <a 
-            href="https://meetcache.com" 
+            href="https://www.meetcache.com" 
             target="_blank" 
             rel="noopener noreferrer"
             className="hover:text-terracotta hover:underline transition-colors duration-200"
