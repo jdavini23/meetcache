@@ -14,11 +14,9 @@ export default function App() {
   if (window.location.pathname.startsWith('/app')) return <CacheApp />;
   if (window.location.pathname === '/privacy') return <Privacy />;
   const handleScrollToSignup = () => {
-    // Scroll to the main waitlist registration form container in the hero section
     const formElement = document.getElementById('hero-form-container');
     if (formElement) {
       formElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      // Find the email input inside and focus it for excellent UX
       const emailInput = document.getElementById('hero-email-input') as HTMLInputElement | null;
       if (emailInput) {
         setTimeout(() => {

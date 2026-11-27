@@ -16,7 +16,6 @@ export default function FinalCTA() {
           transition={{ duration: 0.6 }}
           className="bg-ink text-cream p-10 md:p-16 rounded-[32px] text-center relative overflow-hidden shadow-xl"
         >
-          {/* Subtle design element */}
           <div className="absolute -bottom-24 -left-24 w-64 h-64 bg-terracotta/10 rounded-full blur-3xl pointer-events-none" />
           <div className="absolute -top-24 -right-24 w-64 h-64 bg-sage/10 rounded-full blur-3xl pointer-events-none" />
 
@@ -28,7 +27,6 @@ export default function FinalCTA() {
               Start with what you already know about your kid<span className="text-terracotta">.</span>
             </h2>
             
-            {/* Paragraph */}
             <p 
               id="final-cta-paragraph"
               className="font-sans text-sm sm:text-base text-cream/80 max-w-lg mb-10 leading-relaxed"
@@ -36,7 +34,6 @@ export default function FinalCTA() {
               Join the waitlist and we'll invite parents as spots open. We'll also ask what would make Cache most useful for your family.
             </p>
 
-            {/* Email form container */}
             <div 
               id="final-cta-form-container"
               className="w-full max-w-md"
