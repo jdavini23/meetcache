@@ -6,6 +6,7 @@ import { supabase } from '../lib/supabase';
 import { formatChildAge, isChildAgeSupported } from '../lib/childAge';
 import type { ChildMemory, ChildProfile, Conversation, MemorySuggestion, Message, UsedMemory } from '../lib/types';
 import ChatMarkdown from './ChatMarkdown';
+import { parseServerSentEvents } from '../lib/chatStream';
 import MemoryManager from './MemoryManager';
 import WaitlistForm from './WaitlistForm';
 
@@ -61,8 +62,47 @@ function splitParentNotes(stored: string | null | undefined) {
 }
 
 const CHAT_POLL_INTERVAL_MS = 1_000;
+// How long to wait for the server to start answering. A streamed reply then
+// has until CHAT_REQUEST_TIMEOUT_MS to finish.
 const CHAT_ATTEMPT_TIMEOUT_MS = 10_000;
 const CHAT_REQUEST_TIMEOUT_MS = 95_000;
+
+type ChatResponseBody = { parentMessage?: Message; message?: Message; error?: string; status?: string; requestId?: string };
+
+type ChatStreamOutcome =
+  | { type: 'done'; body: ChatResponseBody }
+  | { type: 'error'; error: string; requestId?: string }
+  | { type: 'incomplete' };
+
+async function readChatStream(stream: ReadableStream<Uint8Array>, onDelta: (text: string) => void): Promise<ChatStreamOutcome> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (value) buffer += decoder.decode(value, { stream: true });
+      if (done) buffer += decoder.decode() + '\n\n';
+      const parsed = parseServerSentEvents(buffer);
+      buffer = parsed.rest;
+      for (const { event, data } of parsed.events) {
+        const payload = (data ?? {}) as { text?: unknown; error?: unknown; requestId?: unknown } & ChatResponseBody;
+        if (event === 'delta' && typeof payload.text === 'string') onDelta(payload.text);
+        if (event === 'done' && payload.message && payload.parentMessage) return { type: 'done', body: payload };
+        if (event === 'error') {
+          return {
+            type: 'error',
+            error: typeof payload.error === 'string' ? payload.error : 'Cache could not respond right now. Please try again.',
+            requestId: typeof payload.requestId === 'string' ? payload.requestId : undefined,
+          };
+        }
+      }
+      if (done) return { type: 'incomplete' };
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
 
 class ChatRequestError extends Error {
   requestId?: string;
@@ -455,6 +495,7 @@ export default function CacheApp() {
   const [signInResult, setSignInResult] = useState<'idle' | 'sending' | 'sent' | 'invite-only' | 'error'>('idle');
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+  const [streamingReply, setStreamingReply] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
@@ -677,11 +718,11 @@ export default function CacheApp() {
 
   useEffect(() => {
     if (isNearLatestRef.current) {
-      messagesEndRef.current?.scrollIntoView({ block: 'end', behavior: sending ? 'smooth' : 'auto' });
+      messagesEndRef.current?.scrollIntoView({ block: 'end', behavior: sending && streamingReply === null ? 'smooth' : 'auto' });
     } else if (messages.length > 0) {
       setHasUnreadMessages(true);
     }
-  }, [messages.length, sending]);
+  }, [messages.length, sending, streamingReply]);
 
   useModalFocus(contextOpen, contextDrawerRef, closeContext, drawerFocusMemories ? mobileMemoryHeadingRef : undefined);
   useModalFocus(accountOpen, accountDialogRef, closeAccount, accountCloseButtonRef, accountButtonRef);
@@ -701,7 +742,7 @@ export default function CacheApp() {
     setConversation(data as Conversation); setMessages([]); setAppState('ready');
   };
 
-  const requestChatResponse = async (content: string, clientRequestId: string) => {
+  const requestChatResponse = async (content: string, clientRequestId: string, onDelta: (text: string | null) => void) => {
     const startedAt = Date.now();
     let lastRequestId: string | undefined;
     while (Date.now() - startedAt < CHAT_REQUEST_TIMEOUT_MS) {
@@ -715,7 +756,11 @@ export default function CacheApp() {
       try {
         response = await fetch('/api/chat', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token ?? ''}` },
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'text/event-stream, application/json',
+            Authorization: `Bearer ${session?.access_token ?? ''}`,
+          },
           body: JSON.stringify({ message: content, clientRequestId }),
           signal: controller.signal,
         });
@@ -728,7 +773,26 @@ export default function CacheApp() {
 
       lastRequestId = response.headers.get('X-Request-ID') ?? undefined;
       const contentType = response.headers.get('content-type') ?? '';
-      let body: { parentMessage?: Message; message?: Message; error?: string; status?: string; requestId?: string } = {};
+      if (contentType.includes('text/event-stream') && response.body) {
+        const streamTimer = window.setTimeout(
+          () => controller.abort(),
+          Math.max(0, CHAT_REQUEST_TIMEOUT_MS - (Date.now() - startedAt)),
+        );
+        let outcome: ChatStreamOutcome = { type: 'incomplete' };
+        try {
+          outcome = await readChatStream(response.body, onDelta);
+        } catch {
+          // A dropped connection retries below with the same request ID.
+        } finally {
+          window.clearTimeout(streamTimer);
+        }
+        if (outcome.type === 'done') return outcome.body;
+        if (outcome.type === 'error') throw new ChatRequestError(outcome.error, outcome.requestId ?? lastRequestId);
+        onDelta(null);
+        await wait(CHAT_POLL_INTERVAL_MS);
+        continue;
+      }
+      let body: ChatResponseBody = {};
       if (contentType.includes('application/json')) {
         try {
           body = await response.json() as typeof body;
@@ -816,7 +880,9 @@ export default function CacheApp() {
       }]);
     }
     try {
-      const body = await requestChatResponse(content, clientRequestId);
+      const body = await requestChatResponse(content, clientRequestId, (text) => {
+        setStreamingReply((current) => (text === null ? null : (current ?? '') + text));
+      });
       setMessages((current) => {
         const pendingMessageIndex = current.findIndex((message) => message.id === pendingMessageId);
         if (pendingMessageIndex === -1) return [...current, body.parentMessage!, body.message!];
@@ -829,7 +895,7 @@ export default function CacheApp() {
       const requestId = error instanceof ChatRequestError ? error.requestId : undefined;
       setNotice(`${error instanceof Error ? error.message : 'Cache could not respond just now. Your message is still here. Please try again.'}${requestId ? `\nIf this keeps happening, email hello@meetcache.com with this code: ${requestId}` : ''}`);
       return false;
-    } finally { sendLock.current = false; setSending(false); }
+    } finally { sendLock.current = false; setSending(false); setStreamingReply(null); }
   };
 
   const downloadData = async () => {
@@ -995,7 +1061,8 @@ export default function CacheApp() {
               </div>
             </div>}
             {messages.map((message) => <div key={message.id}><ChatMessage message={message} />{message.role === 'assistant' && <><MemoryUseDisclosure memories={message.used_memories ?? []} onOpen={() => recordProductEvent('memory_use_disclosure_opened', message.id)} /><MemorySuggestionCard suggestions={memorySuggestions[message.id] ?? []} onResolve={resolveMemorySuggestion} onManage={openMemoryManager} /></>}</div>)}
-            {sending && <div className="flex w-fit items-center gap-2.5 rounded-2xl rounded-bl-md border border-sage/15 bg-sage/10 px-4 py-3 text-sm text-ink" role="status"><span className="grid size-7 place-items-center rounded-full bg-white/70 text-sage" aria-hidden="true"><Sparkles className="size-3.5" /></span><span>Cache is thinking<span className="chat-thinking-dots" aria-hidden="true"><i /><i /><i /></span></span><span className="sr-only">Cache is preparing a response</span></div>}
+            {sending && streamingReply && <div data-testid="streaming-reply"><div aria-hidden="true"><ChatMessage message={{ id: 'streaming-reply', conversation_id: conversation?.id ?? '', user_id: '', role: 'assistant', content: streamingReply, created_at: '' }} /></div><span className="sr-only" role="status">Cache is replying</span></div>}
+            {sending && !streamingReply && <div className="flex w-fit items-center gap-2.5 rounded-2xl rounded-bl-md border border-sage/15 bg-sage/10 px-4 py-3 text-sm text-ink" role="status"><span className="grid size-7 place-items-center rounded-full bg-white/70 text-sage" aria-hidden="true"><Sparkles className="size-3.5" /></span><span>Cache is thinking<span className="chat-thinking-dots" aria-hidden="true"><i /><i /><i /></span></span><span className="sr-only">Cache is preparing a response</span></div>}
             <div ref={messagesEndRef} />
           </div>
           <div className="shrink-0 border-t border-ink/10 bg-white px-4 pb-4 pt-3 sm:px-6 sm:pb-5">

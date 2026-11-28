@@ -597,7 +597,7 @@ describe('POST /api/chat model safety classification', () => {
     expect(response.status).toBe(200);
     expect(dependencies.gemini.models.generateContent).toHaveBeenCalledWith(expect.objectContaining({
       config: expect.objectContaining({
-        responseJsonSchema: expect.objectContaining({ required: ['content', 'usedMemoryIds', 'safetyCategory'] }),
+        responseJsonSchema: expect.objectContaining({ required: ['safetyCategory', 'content', 'usedMemoryIds'] }),
       }),
     }));
     expect(dependencies.supabase.rpc).toHaveBeenCalledWith('persist_assistant_message_with_memory_uses', expect.objectContaining({
@@ -606,6 +606,157 @@ describe('POST /api/chat model safety classification', () => {
       p_used_memory_ids: [],
     }));
     expect(response.body.message.used_memories).toEqual([]);
+  });
+});
+
+describe('POST /api/chat streaming', () => {
+  function streamingDependencies(chunks: string[] | (() => AsyncGenerator<{ text: string }>), extraQueries: ReturnType<typeof mockQuery>[] = []) {
+    const dependencies = authenticatedDependencies([
+      mockQuery({ data: profile, error: null }),
+      mockQuery({ data: conversation, error: null }),
+      mockQuery({ data: null, error: null }),
+      mockQuery({ data: parentMessage, error: null }),
+      mockQuery({ data: [], error: null }),
+      mockQuery({ data: [approvedMemory], error: null }),
+      mockQuery({ data: null, error: null }),
+      mockQuery({ data: null, error: null }),
+      ...extraQueries,
+    ]);
+    const generator = typeof chunks === 'function'
+      ? chunks
+      : async function* () { for (const text of chunks) yield { text }; };
+    const generateContentStream = vi.fn(() => Promise.resolve(generator()));
+    return { ...dependencies, gemini: { models: { ...dependencies.gemini.models, generateContentStream } } };
+  }
+
+  function splitIntoChunks(value: string, size: number) {
+    const chunks: string[] = [];
+    for (let index = 0; index < value.length; index += size) chunks.push(value.slice(index, index + size));
+    return chunks;
+  }
+
+  function readEvents(body: string) {
+    return body.split('\n\n').filter(Boolean).map((block) => {
+      const event = block.match(/^event: (.+)$/m)?.[1];
+      const data = block.match(/^data: (.+)$/m)?.[1];
+      return { event, data: data ? JSON.parse(data) : undefined };
+    });
+  }
+
+  it('streams the reply as it is generated, then sends the saved messages', async () => {
+    const reply = 'Try a **two-minute** warning.\n\nThen use a "visual" timer.';
+    const dependencies = streamingDependencies(splitIntoChunks(JSON.stringify({ safetyCategory: 'none', content: reply, usedMemoryIds: [approvedMemory.id] }), 7));
+    const app = createApp(dependencies as never);
+
+    const response = await request(app).post('/api/chat')
+      .set('Authorization', 'Bearer token')
+      .set('Accept', 'text/event-stream')
+      .send({ message: parentMessage.content, clientRequestId: parentMessage.client_request_id });
+
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toContain('text/event-stream');
+    const events = readEvents(response.text);
+    const deltas = events.filter((event) => event.event === 'delta');
+    expect(deltas.length).toBeGreaterThan(1);
+    expect(deltas.map((event) => event.data.text).join('')).toBe(reply);
+    expect(events.at(-1)?.event).toBe('done');
+    expect(events.at(-1)?.data.message.used_memories).toEqual([{ memory_id: approvedMemory.id, memory_type: approvedMemory.memory_type, content: approvedMemory.content }]);
+    expect(dependencies.gemini.models.generateContent).not.toHaveBeenCalled();
+    expect(dependencies.gemini.models.generateContentStream).toHaveBeenCalledWith(expect.objectContaining({
+      config: expect.objectContaining({ abortSignal: expect.any(AbortSignal) }),
+    }));
+    expect(dependencies.supabase.rpc).toHaveBeenCalledWith('persist_assistant_message_with_memory_uses', expect.objectContaining({ p_content: reply }));
+  });
+
+  it('never streams a reply the model flags as unsafe', async () => {
+    const dependencies = streamingDependencies(splitIntoChunks(JSON.stringify({ safetyCategory: 'emergency', content: 'Here is some general advice.', usedMemoryIds: [] }), 5));
+    const app = createApp(dependencies as never);
+
+    const response = await request(app).post('/api/chat')
+      .set('Authorization', 'Bearer token')
+      .set('Accept', 'text/event-stream')
+      .send({ message: 'He licked something under the sink', clientRequestId: parentMessage.client_request_id });
+
+    const events = readEvents(response.text);
+    expect(events.map((event) => event.event)).toEqual(['done']);
+    expect(dependencies.supabase.rpc).toHaveBeenCalledWith('persist_assistant_message_with_memory_uses', expect.objectContaining({
+      p_content: expect.stringContaining('This could be an emergency'),
+      p_memory_suggestion_eligible: false,
+    }));
+  });
+
+  it('stops streaming once a reply discourages emergency care', async () => {
+    const dependencies = streamingDependencies([
+      '{"safetyCategory":"none","content":"Stay calm. ',
+      'Please avoid emergency care and keep going',
+      ' with more advice.","usedMemoryIds":[]}',
+    ]);
+    const app = createApp(dependencies as never);
+
+    const response = await request(app).post('/api/chat')
+      .set('Authorization', 'Bearer token')
+      .set('Accept', 'text/event-stream')
+      .send({ message: 'What should I do?', clientRequestId: parentMessage.client_request_id });
+
+    const events = readEvents(response.text);
+    expect(events.filter((event) => event.event === 'delta').map((event) => event.data.text).join('')).toBe('Stay calm. ');
+    expect(events.at(-1)?.event).toBe('done');
+    expect(events.at(-1)?.data.message.used_memories).toEqual([]);
+    expect(dependencies.supabase.rpc).toHaveBeenCalledWith('persist_assistant_message_with_memory_uses', expect.objectContaining({
+      p_content: expect.stringContaining('If anyone may be in danger right now'),
+    }));
+  });
+
+  it('sends an error event and marks the request failed when generation breaks mid-stream', async () => {
+    const failedStatusUpdate = mockQuery({ data: null, error: null });
+    const dependencies = authenticatedDependencies([
+      mockQuery({ data: profile, error: null }),
+      mockQuery({ data: conversation, error: null }),
+      mockQuery({ data: null, error: null }),
+      mockQuery({ data: parentMessage, error: null }),
+      mockQuery({ data: [], error: null }),
+      mockQuery({ data: [approvedMemory], error: null }),
+      failedStatusUpdate,
+    ]);
+    const generateContentStream = vi.fn(() => Promise.resolve((async function* () {
+      yield { text: '{"safetyCategory":"none","content":"Try a' };
+      throw new Error('The operation was aborted due to timeout');
+    })()));
+    const app = createApp({ ...dependencies, gemini: { models: { generateContentStream } } } as never);
+
+    const response = await request(app).post('/api/chat')
+      .set('Authorization', 'Bearer token')
+      .set('Accept', 'text/event-stream')
+      .send({ message: parentMessage.content, clientRequestId: parentMessage.client_request_id });
+
+    const events = readEvents(response.text);
+    expect(events.map((event) => event.event)).toEqual(['delta', 'error']);
+    expect(events[1].data.error).toBe('Cache couldn’t reply just now. Your message is still here. Try again.');
+    expect(events[1].data.requestId).toBe(response.headers['x-request-id']);
+    expect(failedStatusUpdate.update).toHaveBeenCalledWith({ response_status: 'failed' });
+  });
+
+  it('answers greetings with plain JSON even when the client accepts a stream', async () => {
+    const dependencies = authenticatedDependencies([
+      mockQuery({ data: profile, error: null }),
+      mockQuery({ data: conversation, error: null }),
+      mockQuery({ data: null, error: null }),
+      mockQuery({ data: parentMessage, error: null }),
+      mockQuery({ data: [], error: null }),
+      mockQuery({ data: assistantMessage, error: null }),
+      mockQuery({ data: null, error: null }),
+      mockQuery({ data: null, error: null }),
+    ]);
+    const app = createApp(dependencies as never);
+
+    const response = await request(app).post('/api/chat')
+      .set('Authorization', 'Bearer token')
+      .set('Accept', 'text/event-stream')
+      .send({ message: 'Hello', clientRequestId: parentMessage.client_request_id });
+
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toContain('application/json');
+    expect(response.body.message).toBeTruthy();
   });
 });
 

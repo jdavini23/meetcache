@@ -32,6 +32,7 @@ const app = createApp({
   rateLimitWindowSeconds: positiveInteger(process.env.CHAT_RATE_LIMIT_WINDOW_SECONDS, 60),
   dailyLimitMax: positiveInteger(process.env.CHAT_DAILY_LIMIT_MAX, 100),
   staleRequestSeconds: positiveInteger(process.env.CHAT_REQUEST_STALE_SECONDS, 90),
+  generationTimeoutSeconds: positiveInteger(process.env.CHAT_GENERATION_TIMEOUT_SECONDS, 45),
   waitlistAlert: waitlistAlertFromEnv(),
 });
 
