@@ -38,6 +38,14 @@ The test suite uses mocked Supabase and Gemini responses, so it does not require
   durable database-backed limit.
 - Each account is also limited to 100 response attempts per UTC day by default.
   Configure `CHAT_DAILY_LIMIT_MAX` to adjust that cost ceiling.
+- `/api/chat` streams Gemini replies as server-sent events (`delta`, then one
+  `done` with the saved messages, or `error`) when the browser sends
+  `Accept: text/event-stream`. Nothing streams until the model's
+  `safetyCategory` is `none`, so a flagged reply only ever shows the handoff.
+  Instant replies (greetings, saved-context summaries, keyword safety handoffs,
+  already-answered retries) still return JSON. Generation is cut off after
+  `CHAT_GENERATION_TIMEOUT_SECONDS` (45 by default), below the 60-second
+  Vercel function limit, so a stuck reply is marked failed and can be retried.
 - Pending requests older than `CHAT_REQUEST_STALE_SECONDS` (90 seconds by
   default) can be reclaimed safely after an interrupted server request.
 - The chat endpoint verifies a Supabase access token, reads the caller's profile, and persists messages server-side. Database row-level security keeps browser access scoped to its owner.

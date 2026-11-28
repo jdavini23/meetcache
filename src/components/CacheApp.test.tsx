@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import CacheApp from './CacheApp';
 
@@ -339,6 +339,92 @@ describe('CacheApp', () => {
     expect(await screen.findByText('Try one calm step.')).toBeInTheDocument();
     expect(input).toHaveValue('');
     expect(fetch).toHaveBeenCalledWith('/api/chat', expect.objectContaining({ method: 'POST' }));
+  });
+
+  describe('streamed replies', () => {
+    const encoder = new TextEncoder();
+    const sse = (event: string, data: unknown) => encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    const streamedParent = { id: 'parent-1', conversation_id: 'conversation-1', user_id: 'user-1', role: 'parent', content: 'What should I try?', created_at: '2026-01-01T00:00:00.000Z' };
+    const streamedAssistant = { id: 'assistant-2', conversation_id: 'conversation-1', user_id: 'user-1', role: 'assistant', content: 'Try one calm step. Then breathe together.', created_at: '2026-01-01T00:00:01.000Z' };
+
+    function setUpChat(chatResponses: Array<() => Response>) {
+      vi.stubGlobal('crypto', { randomUUID: vi.fn(() => 'f8b67515-5e62-4a65-b7c7-69b7d7c1b471') });
+      const fetchMock = vi.fn((url: string, _options?: RequestInit) => {
+        if (url === '/api/chat') return Promise.resolve((chatResponses.shift() ?? chatResponses[0])());
+        return Promise.resolve(new Response(JSON.stringify({ suggestions: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      getSession.mockResolvedValue({ data: { session: { access_token: 'token', user: { id: 'user-1' } } } });
+      from.mockImplementation((table: string) => {
+        if (table === 'child_profiles') return queryResult(savedProfile);
+        if (table === 'conversations') return queryResult({ id: 'conversation-1', child_profile_id: 'profile-1', user_id: 'user-1' });
+        return queryResult([]);
+      });
+      return fetchMock;
+    }
+
+    async function send() {
+      const input = await screen.findByLabelText('Message Cache');
+      fireEvent.change(input, { target: { value: 'What should I try?' } });
+      fireEvent.submit(input.closest('form')!);
+    }
+
+    it('shows the reply as it streams, then replaces it with the saved message', async () => {
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
+      const body = new ReadableStream<Uint8Array>({ start(streamController) { controller = streamController; } });
+      const fetchMock = setUpChat([() => new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })]);
+      render(<CacheApp />);
+      await send();
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/chat', expect.objectContaining({
+        headers: expect.objectContaining({ Accept: 'text/event-stream, application/json' }),
+      })));
+      controller.enqueue(sse('delta', { text: 'Try one calm' }));
+      expect(await screen.findByTestId('streaming-reply')).toHaveTextContent('Try one calm');
+      expect(screen.queryByText('Cache is thinking')).not.toBeInTheDocument();
+
+      controller.enqueue(sse('delta', { text: ' step.' }));
+      await waitFor(() => expect(screen.getByTestId('streaming-reply')).toHaveTextContent('Try one calm step.'));
+
+      controller.enqueue(sse('done', { parentMessage: streamedParent, message: streamedAssistant }));
+      controller.close();
+      expect(await screen.findByText('Try one calm step. Then breathe together.')).toBeInTheDocument();
+      expect(screen.queryByTestId('streaming-reply')).not.toBeInTheDocument();
+    });
+
+    it('shows the server error from a failed stream and offers a retry', async () => {
+      setUpChat([() => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(sse('delta', { text: 'Try' }));
+          controller.enqueue(sse('error', { error: 'Cache couldn’t reply just now. Your message is still here. Try again.', requestId: 'request-9' }));
+          controller.close();
+        },
+      }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } })]);
+      render(<CacheApp />);
+      await send();
+
+      expect(await screen.findByText(/Cache couldn’t reply just now/)).toHaveTextContent('request-9');
+      expect(screen.queryByTestId('streaming-reply')).not.toBeInTheDocument();
+    });
+
+    it('retries a dropped stream with the same request ID and uses the saved reply', async () => {
+      const fetchMock = setUpChat([
+        () => new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(sse('delta', { text: 'Try one' }));
+            controller.close();
+          },
+        }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } }),
+        () => new Response(JSON.stringify({ parentMessage: streamedParent, message: streamedAssistant }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      ]);
+      render(<CacheApp />);
+      await send();
+
+      expect(await screen.findByText('Try one calm step. Then breathe together.', undefined, { timeout: 3000 })).toBeInTheDocument();
+      const chatBodies = fetchMock.mock.calls.filter(([url]) => url === '/api/chat').map(([, options]) => JSON.parse((options as RequestInit).body as string));
+      expect(chatBodies).toHaveLength(2);
+      expect(chatBodies[1].clientRequestId).toBe(chatBodies[0].clientRequestId);
+    });
   });
 
   it('aborts hanging chat attempts and retries with the original idempotency ID', async () => {
