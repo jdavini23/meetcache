@@ -64,8 +64,14 @@ The test suite uses mocked Supabase and Gemini responses, so it does not require
   and service role. Add your own test addresses to `private.internal_emails`
   in the SQL editor so the funnel counts only real parents; never commit them
   to a migration.
+- Urgent-safety messages are caught in two layers. A keyword detector in
+  `src/lib/safety.ts` answers clear emergencies immediately without calling
+  Gemini. Every other reply asks Gemini for a required `safetyCategory`; when it
+  is not `none`, the generated reply is replaced with the matching handoff and
+  a `model_safety_handoff` event is logged. Review those events to find phrasing
+  the keyword detector should learn.
 - Set `SENTRY_DSN` and `VITE_SENTRY_DSN` to enable sanitized server and browser
   error reporting. Cache removes request bodies, headers, cookies, and user
   data before reporting events. Monitor `/readyz` and create an alert for
-  repeated `chat_request_failed`, `readiness_failed`, or `safety_handoff`
-  events; never add prompts or profile data to operational logs.
+  repeated `chat_request_failed`, `readiness_failed`, `safety_handoff`, or
+  `model_safety_handoff` events; never add prompts or profile data to operational logs.
