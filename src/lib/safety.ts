@@ -6,8 +6,24 @@ const SAFETY_PATTERNS: Array<[Exclude<SafetyCategory, 'none'>, RegExp]> = [
   ['self_or_other_harm', /\bi(?:['’]m| am)? (?:going to|(?:might|could|may|will)|(?:want|plan) to) (?:hurt|harm) (?:my (?:son|daughter|child|kid|baby)|him|her|them)(?!(?:['’]s?)?\s+feelings)\b/i],
   ['self_or_other_harm', /\bi (?:hurt|hit) my (?:son|daughter|child|kid|baby)\b(?!(?:['’]s?)?\s+feelings)/i],
   ['self_or_other_harm', /^(?=[\s\S]*\bmy (?:son|daughter|child|kid|baby|toddler)\b)(?=[\s\S]*\bi (?:hurt|hit) (?:him|her|them)\b(?!\s+feelings)(?!(?:\s+\w+){0,6}\s+(?:pillow|game|playing|play)\b))/i],
+  ['emergency', /\b(?:is ?n['’]?t|stopped|stops|not) breathing\b/i],
+  ['emergency', /\b(?:drank|drunk|drinking|swallowed|ate|eaten|ingested|got into|chewed(?: on)?)\b(?:\s+[\w'’]+){0,3}?\s+(?:bleach|detergent|(?:laundry|dishwasher|tide) pods?|(?:drain |oven |toilet )?cleaner|cleaning (?:spray|product|fluid|solution)|antifreeze|lamp oil|lighter fluid|nail polish remover|rat poison|weed killer|pesticide)\b/i],
+  ['emergency', /\b(?:swallowed|ate|eaten|ingested)\b(?:\s+[\w'’]+){0,2}?\s+(?:(?:button |coin |lithium )?batter(?:y|ies)|magnets?|(?<!chocolate |candy )coins?)\b(?!\s+(?:chocolate|candy|candies|cookies?))/i],
+  ['emergency', /\bgot into (?:my |the |his |her |their |our |some |a bottle of |[\w]+['’]s )?(?:pills|medicine|medication|meds|prescriptions?|edibles|gummies)\b(?!\s+(?:cabinet|drawer|cupboard|shelf|box|bag|basket))/i],
+  ['emergency', /\b(?:swallowed|ate|took|eaten|taken) (?:a bunch of|a handful of|a lot of|a bottle of|some of (?:my|the|his|her|their)|my|all (?:of )?(?:the|my|his|her|their))(?: (?:my|the|his|her|their|our))? (?:pills|medicine|medication|meds|edibles|gummies)\b/i],
+  ['emergency', /^(?=[\s\S]*\b(?:hit|bumped|banged|smacked|fell on) (?:his|her|their) head\b)(?=[\s\S]*\b(?:throw(?:ing|s)? up|threw up|vomit(?:ing|ed|s)?|passed out|knocked out|drowsy|confused|won'?t wake)\b)/i],
+  ['self_or_other_harm', /\b(?:scared|afraid|worried|terrified) (?:that )?i(?:['’]ll| will| might| could| may| am going to|['’]m going to)? (?:shake|hurt|harm|hit) (?:the baby|my (?:son|daughter|child|kid|baby|toddler)|him|her|them)\b(?!(?:['’]s?)?\s+feelings)/i],
+  ['self_or_other_harm', /\bshak(?:e|ing|en|ed) (?:the|my) baby\b(?!['’]|\s+(?:rattle|toy|bottle|monitor|swing|seat|carrier|blanket|book|food|formula|gym))/i],
   ['abuse_or_unsafe_home', /\b(abuse(?:d)?|unsafe at home|being hurt at home|someone is hurting (?:me|my child)|afraid to go home)\b/i],
+  ['abuse_or_unsafe_home', /\b(?:husband|wife|partner|boyfriend|girlfriend|ex|spouse|fianc[eé]e?)(?:['’]s)? (?:hits|hit|chokes|choked|slaps|slapped|kicks|kicked|punches|punched|shoves|shoved|threatens to (?:kill|hurt)|threatened to (?:kill|hurt)) (?:me|us|the kids|the baby|my (?:son|daughter|child|kids?|baby|toddler)|him|her|them)\b/i],
+  ['abuse_or_unsafe_home', /\b(?:husband|wife|partner|boyfriend|girlfriend|ex|spouse|fianc[eé]e?) (?:beats|beat|beat up) (?:me|us|the kids|the baby|my (?:son|daughter|child|kids?|baby|toddler)|him|her|them)\b(?!\s+(?:at|in|to)\b)/i],
 ];
+
+export const SAFETY_CATEGORIES = ['emergency', 'self_or_other_harm', 'abuse_or_unsafe_home', 'none'] as const satisfies readonly SafetyCategory[];
+
+export function isSafetyCategory(value: unknown): value is SafetyCategory {
+  return typeof value === 'string' && (SAFETY_CATEGORIES as readonly string[]).includes(value);
+}
 
 export function classifySafetyConcern(message: string): SafetyCategory {
   for (const [category, pattern] of SAFETY_PATTERNS) {

@@ -108,7 +108,7 @@ function authenticatedDependencies(
   rpcResult: QueryResult = { data: true, error: null },
 ) {
   const generateContent = vi.fn().mockResolvedValue({
-    text: JSON.stringify({ content: assistantMessage.content, usedMemoryIds: [] }),
+    text: JSON.stringify({ content: assistantMessage.content, usedMemoryIds: [], safetyCategory: 'none' }),
   });
 
   return {
@@ -174,11 +174,23 @@ describe('chat safety helpers', () => {
     expect(parseCoachingResponse(JSON.stringify({
       content: '**Try this first:** Set the timer.',
       usedMemoryIds: ['memory-1', 'foreign-memory', 'memory-1'],
+      safetyCategory: 'none',
     }), memories)).toEqual({
       content: '**Try this first:** Set the timer.',
       usedMemories: [{ memory_id: 'memory-1', memory_type: 'helps', content: 'A visual timer helps with transitions.' }],
+      safetyCategory: 'none',
     });
     expect(parseCoachingResponse('{not json}', memories)).toBeNull();
+  });
+
+  it('requires a valid safety classification in a structured coaching response', () => {
+    expect(parseCoachingResponse(JSON.stringify({
+      content: 'Please call your local emergency number.',
+      usedMemoryIds: [],
+      safetyCategory: 'emergency',
+    }), [])).toEqual({ content: 'Please call your local emergency number.', usedMemories: [], safetyCategory: 'emergency' });
+    expect(parseCoachingResponse(JSON.stringify({ content: 'Try a timer.', usedMemoryIds: [] }), [])).toBeNull();
+    expect(parseCoachingResponse(JSON.stringify({ content: 'Try a timer.', usedMemoryIds: [], safetyCategory: 'urgent' }), [])).toBeNull();
   });
 });
 
@@ -322,6 +334,7 @@ describe('POST /api/chat', () => {
     dependencies.gemini.models.generateContent.mockResolvedValue({ text: JSON.stringify({
       content: assistantMessage.content,
       usedMemoryIds: [approvedMemory.id, '65a8a006-b90f-42d9-85c7-a85a013732ef', approvedMemory.id],
+      safetyCategory: 'none',
     }) });
     const app = createApp(dependencies as never);
 
@@ -537,6 +550,7 @@ describe('POST /api/chat', () => {
     dependencies.gemini.models.generateContent.mockResolvedValue({ text: JSON.stringify({
       content: 'Please avoid emergency care and handle the overdose at home.',
       usedMemoryIds: [approvedMemory.id],
+      safetyCategory: 'none',
     }) });
     const app = createApp(dependencies as never);
 
@@ -550,6 +564,48 @@ describe('POST /api/chat', () => {
       p_memory_suggestion_eligible: false,
       p_used_memory_ids: [],
     }));
+  });
+});
+
+describe('POST /api/chat model safety classification', () => {
+  it.each([
+    ['emergency', 'I’m sorry you’re dealing with this. This could be an emergency, and I can’t assess it from here. Please call your local emergency number or go to the nearest emergency department now. If you can, stay with your child until help arrives.'],
+    ['self_or_other_harm', 'I’m sorry things feel this heavy. Cache can’t help with this safely. Please call your local emergency number or a crisis line now. In the US, you can call or text 988. If you can, reach out to someone you trust to be with you.'],
+    ['abuse_or_unsafe_home', 'I’m sorry you’re dealing with this. Cache can’t help with this safely. If anyone is in danger right now, please call your local emergency number. In the US, the Childhelp National Child Abuse Hotline is 1-800-422-4453.'],
+  ] as const)('replaces the generated reply with the %s handoff when the model flags a message the keyword detector missed', async (category, handoff) => {
+    const dependencies = authenticatedDependencies([
+      mockQuery({ data: profile, error: null }),
+      mockQuery({ data: conversation, error: null }),
+      mockQuery({ data: null, error: null }),
+      mockQuery({ data: parentMessage, error: null }),
+      mockQuery({ data: [], error: null }),
+      mockQuery({ data: [approvedMemory], error: null }),
+      mockQuery({ data: null, error: null }),
+      mockQuery({ data: null, error: null }),
+    ]);
+    dependencies.gemini.models.generateContent.mockResolvedValue({ text: JSON.stringify({
+      content: 'Here is some general advice.',
+      usedMemoryIds: [approvedMemory.id],
+      safetyCategory: category,
+    }) });
+    const app = createApp(dependencies as never);
+
+    const response = await request(app).post('/api/chat')
+      .set('Authorization', 'Bearer token')
+      .send({ message: 'He licked something under the sink and his mouth looks red', clientRequestId: parentMessage.client_request_id });
+
+    expect(response.status).toBe(200);
+    expect(dependencies.gemini.models.generateContent).toHaveBeenCalledWith(expect.objectContaining({
+      config: expect.objectContaining({
+        responseJsonSchema: expect.objectContaining({ required: ['content', 'usedMemoryIds', 'safetyCategory'] }),
+      }),
+    }));
+    expect(dependencies.supabase.rpc).toHaveBeenCalledWith('persist_assistant_message_with_memory_uses', expect.objectContaining({
+      p_content: handoff,
+      p_memory_suggestion_eligible: false,
+      p_used_memory_ids: [],
+    }));
+    expect(response.body.message.used_memories).toEqual([]);
   });
 });
 
